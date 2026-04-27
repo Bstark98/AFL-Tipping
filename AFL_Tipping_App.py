@@ -4493,32 +4493,32 @@ st.markdown("""
    layout is unchanged — only top/bottom margins and padding get bumped. */
 
 /* Section dividers — the headers like "Season Narrative", "Round-by-Round Grids" */
-.sc-divider{margin:48px 14px 22px!important;}
+.sc-divider{margin:64px 14px 26px!important;}
 
 /* Panel containers — every analytical panel gets more headroom */
 .hl-wrap, .trust-wrap, .pulse, .rhythm,
 .intel-feed, .perf-feed, .calibration-wrap, .split-wrap{
-    margin-top:32px!important;
-    margin-bottom:8px!important;
+    margin-top:44px!important;
+    margin-bottom:14px!important;
 }
 /* Edge wrap (Round Edge panel) sits high in the tab — give it less */
-.edge-wrap{margin-top:24px!important;}
+.edge-wrap{margin-top:32px!important;}
 /* Empty states get extra top room since they sit alone in a tab */
-.empty-state{margin-top:56px!important;}
+.empty-state{margin-top:72px!important;}
 
 /* Hero panel — already prominent, just nudge a bit more top space */
-.hero-t{margin-top:40px!important;}
+.hero-t{margin-top:48px!important;}
 
 /* Tabs — push the tab strip further from whatever sits above it */
-.stTabs [data-baseweb="tab-list"]{margin:44px 0 0!important;}
+.stTabs [data-baseweb="tab-list"]{margin:56px 0 0!important;}
 /* Tab content gets a top buffer so the first panel doesn't crowd the tabs */
-.stTabs [data-baseweb="tab-panel"]{padding-top:14px!important;}
+.stTabs [data-baseweb="tab-panel"]{padding-top:24px!important;}
 
 /* Match cards — more separation between each game */
-.mc{margin:0 14px 18px!important;}
+.mc{margin:0 14px 26px!important;}
 
 /* Day separators inside This Round (e.g. "FRIDAY · ROUND 7") */
-.day-sep{padding:32px 16px 12px!important;}
+.day-sep{padding:44px 16px 16px!important;}
 
 /* Hero internal stat row — taller cells for breathing room */
 .hts{padding:18px 10px 16px!important;}
@@ -4957,39 +4957,34 @@ st.markdown("""
     100% {width:100%;}
 }
 
-/* Reactive percentage counter — uses @property to animate a custom integer
-   property smoothly from 0 to 100. CSS counter() reads it live, so the text
-   updates in lockstep with the bar. Works on Chrome/Edge 85+, Safari 16.4+,
-   Firefox 128+ — older browsers gracefully degrade to a static "0%". */
-/* Percentage counter — uses CSS `content` keyframes which work reliably
-   across all browsers and hosting environments (no @property quirks).
-   Ticks in 5% steps over 20s — visible progression, never freezes. */
-.load-bar-pct-slow::after{
-    content:"0%"!important;
-    animation:load-pct-text-slow 20s linear forwards!important;
+/* Percentage counter — stacked-span pattern. Each .lpc span sits in the same
+   spot, all start invisible. They each fade in on a 1-second delay relative
+   to the previous one and stay visible until the next takes over. Bulletproof
+   across every browser including older mobile Safari and in-app webviews. */
+.load-bar-pct-stack{
+    position:relative;
+    height:1.1em;
+    min-width:42px;
+    text-align:right;
+    font-family:var(--mono);
+    font-size:0.56rem;
+    color:var(--text2);
+    letter-spacing:0.1em;
+    font-weight:700;
+    font-variant-numeric:tabular-nums;
 }
-@keyframes load-pct-text-slow{
-    0%   {content:"0%";}
-    5%   {content:"5%";}
-    10%  {content:"10%";}
-    15%  {content:"15%";}
-    20%  {content:"20%";}
-    25%  {content:"25%";}
-    30%  {content:"30%";}
-    35%  {content:"35%";}
-    40%  {content:"40%";}
-    45%  {content:"45%";}
-    50%  {content:"50%";}
-    55%  {content:"55%";}
-    60%  {content:"60%";}
-    65%  {content:"65%";}
-    70%  {content:"70%";}
-    75%  {content:"75%";}
-    80%  {content:"80%";}
-    85%  {content:"85%";}
-    90%  {content:"90%";}
-    95%  {content:"95%";}
-    100% {content:"100%";}
+.load-bar-pct-stack .lpc{
+    position:absolute;
+    top:0; right:0;
+    opacity:0;
+    animation:lpc-flash 1s linear forwards;
+}
+/* Each span fades in for 1s, stays visible. Higher delays render on top.
+   Stacking order: the last span to animate sits on top, hiding earlier ones. */
+@keyframes lpc-flash{
+    0%   {opacity:0;}
+    5%   {opacity:1;}
+    100% {opacity:1;}
 }
 
 /* Refresh overlay should NOT auto-fade — it stays solid for the full 20s.
@@ -5055,6 +5050,13 @@ def main():
             sub_label = "Initialising prediction engine"
 
         overlay_placeholder = st.empty()
+        # Build the percentage counter as 21 stacked spans, each one shown
+        # for ~1 second of the 20s window. Sibling-targeting animations are
+        # supported everywhere; fancy keyframe-content animations aren't.
+        pct_spans = "".join(
+            f'<span class="lpc lpc-{i}" style="animation-delay:{i:.2f}s">{i*5}%</span>'
+            for i in range(21)
+        )
         overlay_placeholder.markdown(_h(f"""
         <div class="load-overlay refresh-overlay">
           <div class="load-overlay-inner">
@@ -5068,7 +5070,7 @@ def main():
               <div class="load-bar-track">
                 <div class="load-bar-fill load-bar-fill-slow"></div>
               </div>
-              <div class="load-bar-pct load-bar-pct-slow"></div>
+              <div class="load-bar-pct-stack">{pct_spans}</div>
             </div>
             <div class="load-foot">PREDICTION ENGINE · LIVE</div>
           </div>
@@ -5472,9 +5474,6 @@ def main():
 
             st.markdown('<div class="cmd-head"><div class="cmd-label">Round Briefing · Our Predictions</div></div>', unsafe_allow_html=True)
             render_tips(games, tips, sources, top_models, weights, rnd, standings_lookup, all_season_games)
-            # Back-to-top — only useful after scrolling past several match cards
-            if len(games) >= 3:
-                st.markdown('<a href="#page-top" class="back-top" aria-label="Back to top">↑ TOP</a>', unsafe_allow_html=True)
         else:
             st.info("No tips available yet.")
 

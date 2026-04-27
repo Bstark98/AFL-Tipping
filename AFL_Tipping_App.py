@@ -5,6 +5,7 @@ Mobile-first, monospace-framed, instrumented UI.
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 from datetime import datetime, timedelta
 import time
 from collections import defaultdict
@@ -4957,13 +4958,10 @@ st.markdown("""
     100% {width:100%;}
 }
 
-/* Percentage counter — stacked-span pattern. Each .lpc span sits in the same
-   spot, all start invisible. They each fade in on a 1-second delay relative
-   to the previous one and stay visible until the next takes over. Bulletproof
-   across every browser including older mobile Safari and in-app webviews. */
-.load-bar-pct-stack{
-    position:relative;
-    height:1.1em;
+/* Percentage counter — JS-driven for reliability across all environments.
+   The element receives its text content from a same-origin iframe component
+   running real JavaScript. See the components.html block in main(). */
+.load-bar-pct-live{
     min-width:42px;
     text-align:right;
     font-family:var(--mono);
@@ -4972,19 +4970,6 @@ st.markdown("""
     letter-spacing:0.1em;
     font-weight:700;
     font-variant-numeric:tabular-nums;
-}
-.load-bar-pct-stack .lpc{
-    position:absolute;
-    top:0; right:0;
-    opacity:0;
-    animation:lpc-flash 1s linear forwards;
-}
-/* Each span fades in for 1s, stays visible. Higher delays render on top.
-   Stacking order: the last span to animate sits on top, hiding earlier ones. */
-@keyframes lpc-flash{
-    0%   {opacity:0;}
-    5%   {opacity:1;}
-    100% {opacity:1;}
 }
 
 /* Refresh overlay should NOT auto-fade — it stays solid for the full 20s.
@@ -5050,13 +5035,6 @@ def main():
             sub_label = "Initialising prediction engine"
 
         overlay_placeholder = st.empty()
-        # Build the percentage counter as 21 stacked spans, each one shown
-        # for ~1 second of the 20s window. Sibling-targeting animations are
-        # supported everywhere; fancy keyframe-content animations aren't.
-        pct_spans = "".join(
-            f'<span class="lpc lpc-{i}" style="animation-delay:{i:.2f}s">{i*5}%</span>'
-            for i in range(21)
-        )
         overlay_placeholder.markdown(_h(f"""
         <div class="load-overlay refresh-overlay">
           <div class="load-overlay-inner">
@@ -5070,12 +5048,36 @@ def main():
               <div class="load-bar-track">
                 <div class="load-bar-fill load-bar-fill-slow"></div>
               </div>
-              <div class="load-bar-pct-stack">{pct_spans}</div>
+              <div class="load-bar-pct-live" id="afl-pct-live">0%</div>
             </div>
             <div class="load-foot">PREDICTION ENGINE · LIVE</div>
           </div>
         </div>
         """), unsafe_allow_html=True)
+        # Drive the percentage counter with real JavaScript via a hidden iframe
+        # component. Streamlit strips <script> tags from st.markdown, but
+        # st.components.v1.html runs JS in a same-origin iframe — and from
+        # that iframe we can update the element in the parent page.
+        components.html(
+            """
+            <script>
+            (function(){
+                const start = Date.now();
+                const duration = 20000;
+                const target = window.parent.document.getElementById('afl-pct-live');
+                if (!target) return;
+                const tick = () => {
+                    const elapsed = Date.now() - start;
+                    const pct = Math.min(100, Math.floor(elapsed / duration * 100));
+                    target.textContent = pct + '%';
+                    if (pct < 100) requestAnimationFrame(tick);
+                };
+                requestAnimationFrame(tick);
+            })();
+            </script>
+            """,
+            height=0,
+        )
 
         # Target a 20-second total ceremony — pad with sleep if the fetch is faster.
         TARGET_DURATION = 20.0

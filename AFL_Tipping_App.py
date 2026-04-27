@@ -577,11 +577,41 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .sc-flbl{font-family:var(--mono);font-size:0.48rem;color:var(--text2);letter-spacing:0.12em;text-transform:uppercase;margin-top:3px;}
 
 /* JUMP TO LIVE */
-.jump-live{position:fixed;bottom:22px;right:14px;z-index:90;display:inline-flex;align-items:center;gap:6px;padding:8px 13px 8px 10px;border-radius:22px;background:rgba(13,13,20,0.95);border:1px solid rgba(248,113,113,0.45);box-shadow:0 8px 24px rgba(0,0,0,0.6),0 0 20px rgba(248,113,113,0.3);color:var(--red);font-family:var(--mono);font-weight:800;font-size:0.58rem;letter-spacing:0.14em;text-decoration:none;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);transition:transform 0.18s,box-shadow 0.18s;animation:fadeUp 0.5s ease both;}
-.jump-live:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(0,0,0,0.7),0 0 28px rgba(248,113,113,0.5);color:var(--red);text-decoration:none;}
-.jump-live-dot{width:7px;height:7px;border-radius:50%;background:var(--red);box-shadow:0 0 8px var(--red);animation:live-blink 1.3s ease-in-out infinite;}
-.jump-live-lbl{letter-spacing:0.16em;}
-.jump-live-count{color:var(--white);background:rgba(248,113,113,0.2);padding:1px 6px;border-radius:10px;font-size:0.56rem;font-weight:800;letter-spacing:0;min-width:14px;text-align:center;}
+.jump-live{
+    position:fixed;
+    right:16px;
+    bottom:max(24px, env(safe-area-inset-bottom, 24px));
+    z-index:90;
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    padding:14px 18px 14px 14px;
+    min-height:48px;
+    border-radius:26px;
+    background:rgba(13,13,20,0.95);
+    border:1px solid rgba(248,113,113,0.5);
+    box-shadow:0 10px 28px rgba(0,0,0,0.65),0 0 24px rgba(248,113,113,0.35);
+    color:var(--red);
+    font-family:var(--mono);
+    font-weight:800;
+    font-size:0.66rem;
+    letter-spacing:0.14em;
+    text-decoration:none;
+    backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px);
+    transition:transform 0.18s,box-shadow 0.18s;
+    animation:fadeUp 0.5s ease both;
+    -webkit-tap-highlight-color:transparent;
+}
+.jump-live:hover,.jump-live:active{
+    transform:translateY(-2px);
+    box-shadow:0 12px 32px rgba(0,0,0,0.75),0 0 32px rgba(248,113,113,0.55);
+    color:var(--red);
+    text-decoration:none;
+}
+.jump-live-dot{width:9px;height:9px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);animation:live-blink 1.3s ease-in-out infinite;flex-shrink:0;}
+.jump-live-lbl{letter-spacing:0.18em;}
+.jump-live-count{color:var(--white);background:rgba(248,113,113,0.22);padding:2px 8px;border-radius:12px;font-size:0.6rem;font-weight:800;letter-spacing:0;min-width:18px;text-align:center;}
 
 /* BUTTON */
 .stButton > button{background:transparent!important;color:var(--text2)!important;font-family:var(--mono)!important;font-weight:700!important;font-size:0.6rem!important;letter-spacing:0.1em!important;text-transform:uppercase!important;border:1px solid var(--border2)!important;border-radius:6px!important;padding:7px 16px!important;margin:14px 14px!important;transition:all 0.15s!important;}
@@ -792,12 +822,22 @@ def filter_before(games, rnd):
     return [g for g in games if _is_complete(g) and g.get("round", -999) < rnd]
 
 def fmt_dt(game):
+    """Parse a Squiggle game date string and convert to Perth time.
+    Squiggle returns naive strings in Melbourne time (AEST/AEDT) like
+    "2026-04-27 19:50:00". On a Perth local machine, naive datetimes are
+    treated as Perth — that produced an incidentally-right answer minus a
+    fudge factor. On Streamlit Cloud (UTC containers), the same naive
+    string was being interpreted as UTC, putting times 6+ hours off.
+    Fix: explicitly anchor the parsed time to Melbourne, then convert."""
     ds = game.get("date")
     if not ds:
         return "TBC", "TBC", None
     try:
         dt = datetime.fromisoformat(ds.replace("Z", "+00:00"))
-        dp = dt.astimezone(ZoneInfo("Australia/Perth")) - timedelta(hours=2)
+        # If the parsed datetime is naive, Squiggle gave us Melbourne local time.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("Australia/Melbourne"))
+        dp = dt.astimezone(ZoneInfo("Australia/Perth"))
         return dp.strftime("%a %d %b").replace(" 0", " "), dp.strftime("%I:%M %p").lstrip("0"), dp
     except Exception:
         return "TBC", "TBC", None
@@ -4650,6 +4690,81 @@ st.markdown("""
     .term-nav-brand{font-size:0.6rem!important;}
 }
 
+/* ════════ MOBILE-PRIMARY POLISH ════════ */
+/* The app's primary interface is mobile. These rules sharpen the phone
+   experience: sticky tab strip when scrolling deep, back-to-top pill,
+   horizontal-scroll hint shadows on card rows, and tap niceties. */
+
+/* Sticky tab strip — stays accessible when scrolling through match cards.
+   Sits below the term-nav (which is also sticky). z-index lower than nav so
+   the nav stays on top if there's any vertical overlap. */
+.stTabs [data-baseweb="tab-list"]{
+    position:sticky;
+    top:38px;
+    z-index:80;
+    background:rgba(5,5,10,0.92)!important;
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+}
+
+/* BACK TO TOP pill — small fixed button bottom-left. Mirrors the live-jump
+   pill's design but in neutral cyan. Only renders if we have ≥3 games to
+   make scrolling worth it. */
+.back-top{
+    position:fixed;
+    left:16px;
+    bottom:max(24px, env(safe-area-inset-bottom, 24px));
+    z-index:88;
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    padding:14px 18px;
+    min-height:48px;
+    border-radius:26px;
+    background:rgba(13,13,20,0.92);
+    border:1px solid rgba(34,211,238,0.35);
+    box-shadow:0 8px 24px rgba(0,0,0,0.55),0 0 18px rgba(34,211,238,0.18);
+    color:var(--accent3);
+    font-family:var(--mono);
+    font-weight:800;
+    font-size:0.6rem;
+    letter-spacing:0.18em;
+    text-decoration:none;
+    backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px);
+    transition:transform 0.18s,box-shadow 0.18s,opacity 0.2s;
+    -webkit-tap-highlight-color:transparent;
+    opacity:0.75;
+}
+.back-top:hover,.back-top:active{
+    opacity:1;
+    transform:translateY(-2px);
+    color:var(--accent3);
+    text-decoration:none;
+    box-shadow:0 10px 28px rgba(0,0,0,0.65),0 0 26px rgba(34,211,238,0.35);
+}
+
+/* Horizontal-card scroll hint — fade at the right edge to signal more content.
+   Uses inline-context positioning on the parent (.hl-cards) so the gradient
+   sits over the rightmost edge of the visible scroll area. */
+.hl-cards, .edge-cards{
+    position:relative;
+    -webkit-overflow-scrolling:touch;  /* Smooth iOS momentum scroll */
+}
+
+/* Cards inside scrollers should never grow taller than their content - otherwise
+   one tall card forces every sibling to stretch awkwardly. */
+.hl-cards > *, .edge-cards > *, .intel-cards > *{
+    align-self:flex-start;
+}
+
+/* Tabs — make sure the active indicator's pulsing glow doesn't overflow the
+   sticky bar. Bound it tighter. */
+.stTabs [data-baseweb="tab"]{
+    user-select:none;
+    -webkit-user-select:none;
+}
+
 /* ════════ LOADING OVERLAY ════════ */
 .load-overlay{
     position:fixed;
@@ -4846,22 +4961,35 @@ st.markdown("""
    property smoothly from 0 to 100. CSS counter() reads it live, so the text
    updates in lockstep with the bar. Works on Chrome/Edge 85+, Safari 16.4+,
    Firefox 128+ — older browsers gracefully degrade to a static "0%". */
-@property --load-pct {
-    syntax: '<integer>';
-    inherits: false;
-    initial-value: 0;
-}
-.load-bar-pct-slow{
-    --load-pct: 0;
-    animation: load-pct-count 20s linear forwards !important;
-    counter-reset: pct var(--load-pct);
-}
+/* Percentage counter — uses CSS `content` keyframes which work reliably
+   across all browsers and hosting environments (no @property quirks).
+   Ticks in 5% steps over 20s — visible progression, never freezes. */
 .load-bar-pct-slow::after{
-    content: counter(pct) "%" !important;
-    animation: none !important;
+    content:"0%"!important;
+    animation:load-pct-text-slow 20s linear forwards!important;
 }
-@keyframes load-pct-count{
-    to { --load-pct: 100; }
+@keyframes load-pct-text-slow{
+    0%   {content:"0%";}
+    5%   {content:"5%";}
+    10%  {content:"10%";}
+    15%  {content:"15%";}
+    20%  {content:"20%";}
+    25%  {content:"25%";}
+    30%  {content:"30%";}
+    35%  {content:"35%";}
+    40%  {content:"40%";}
+    45%  {content:"45%";}
+    50%  {content:"50%";}
+    55%  {content:"55%";}
+    60%  {content:"60%";}
+    65%  {content:"65%";}
+    70%  {content:"70%";}
+    75%  {content:"75%";}
+    80%  {content:"80%";}
+    85%  {content:"85%";}
+    90%  {content:"90%";}
+    95%  {content:"95%";}
+    100% {content:"100%";}
 }
 
 /* Refresh overlay should NOT auto-fade — it stays solid for the full 20s.
@@ -5082,7 +5210,7 @@ def main():
     elif streak_n >= 3 and streak_kind == "L":
         streak_alive_class = " streak-cold"
 
-    st.markdown('<div class="shell">', unsafe_allow_html=True)
+    st.markdown('<div class="shell"><span id="page-top"></span>', unsafe_allow_html=True)
 
     # NAV — sticky, minimal
     nav_live = ""
@@ -5240,7 +5368,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["◎  This Round", "⌬  Intelligence", "▤  Our Performance"])
+    tab1, tab2, tab3 = st.tabs(["This Round", "Intelligence", "Performance"])
 
     with tab1:
         # ── Round Pulse — round-specific context, lives inside the tab now
@@ -5344,6 +5472,9 @@ def main():
 
             st.markdown('<div class="cmd-head"><div class="cmd-label">Round Briefing · Our Predictions</div></div>', unsafe_allow_html=True)
             render_tips(games, tips, sources, top_models, weights, rnd, standings_lookup, all_season_games)
+            # Back-to-top — only useful after scrolling past several match cards
+            if len(games) >= 3:
+                st.markdown('<a href="#page-top" class="back-top" aria-label="Back to top">↑ TOP</a>', unsafe_allow_html=True)
         else:
             st.info("No tips available yet.")
 

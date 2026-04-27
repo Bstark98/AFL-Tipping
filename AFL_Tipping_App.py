@@ -5064,15 +5064,25 @@ def main():
             (function(){
                 const start = Date.now();
                 const duration = 20000;
-                const target = window.parent.document.getElementById('afl-pct-live');
-                if (!target) return;
-                const tick = () => {
-                    const elapsed = Date.now() - start;
-                    const pct = Math.min(100, Math.floor(elapsed / duration * 100));
-                    target.textContent = pct + '%';
-                    if (pct < 100) requestAnimationFrame(tick);
+                let target = null;
+                let attempts = 0;
+                const findAndStart = () => {
+                    target = window.parent.document.getElementById('afl-pct-live');
+                    if (!target && attempts < 40) {
+                        attempts += 1;
+                        setTimeout(findAndStart, 50);
+                        return;
+                    }
+                    if (!target) return;
+                    const tick = () => {
+                        const elapsed = Date.now() - start;
+                        const pct = Math.min(100, Math.floor(elapsed / duration * 100));
+                        target.textContent = pct + '%';
+                        if (pct < 100) requestAnimationFrame(tick);
+                    };
+                    requestAnimationFrame(tick);
                 };
-                requestAnimationFrame(tick);
+                findAndStart();
             })();
             </script>
             """,

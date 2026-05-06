@@ -376,8 +376,7 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .mc-vs-text{font-family:var(--mono);font-size:0.54rem;font-weight:700;color:var(--text3);letter-spacing:0.14em;}
 .mc-vs-bar{width:1px;height:28px;background:var(--border2);}
 
-.mc-tip{padding:10px 12px 12px;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;}
-.mc-tip-l{min-width:0;}
+.mc-tip{padding:10px 12px 12px;display:flex;flex-direction:column;gap:0;}
 .mc-tip-lbl{font-family:var(--mono);font-size:0.5rem;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--text2);margin-bottom:6px;display:flex;align-items:center;gap:5px;}
 .mc-tip-lbl::before{content:'◆';color:var(--accent);font-size:0.7rem;}
 .mc-tip-chip-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
@@ -388,10 +387,7 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .mc-split-labels{display:flex;justify-content:space-between;margin-top:4px;font-family:var(--mono);font-size:0.5rem;color:var(--text2);letter-spacing:0.04em;}
 .mc-split-labels .hl{color:var(--white);font-weight:700;}
 
-.mc-tip-r{flex-shrink:0;text-align:right;padding-left:12px;border-left:1px solid var(--border);min-width:78px;}
-.mc-margin{font-family:var(--mono);font-size:1.8rem;font-weight:800;letter-spacing:-0.045em;line-height:0.95;color:var(--white);}
-.mc-margin-unit{font-family:var(--mono);font-size:0.54rem;font-weight:600;color:var(--text2);letter-spacing:0.1em;text-transform:uppercase;margin-top:3px;}
-.mc-agree-chip{font-family:var(--mono);font-size:0.54rem;margin-top:6px;font-weight:700;letter-spacing:0.04em;display:flex;align-items:center;justify-content:flex-end;gap:3px;}
+.mc-agree-chip{font-family:var(--mono);font-size:0.54rem;font-weight:700;letter-spacing:0.04em;display:inline-flex;align-items:center;gap:3px;margin-left:auto;padding:2px 7px;border-radius:2px;background:rgba(255,255,255,0.03);border:1px solid var(--border2);white-space:nowrap;}
 
 /* ════════ MATCH CARD CONFIDENCE TIER — left-edge accent ════════ */
 /* Quiet but constant signal: each card has a 3px coloured stripe on its left
@@ -1883,27 +1879,21 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
             </div>
           </div>
           <div class="mc-tip">
-            <div class="mc-tip-l">
-              <div class="mc-tip-lbl">Our Prediction</div>
-              <div class="mc-tip-chip-row">
-                {team_chip(c['team'], size="lg")}
-                <span class="conf-chip {conf_tier}">{conf_label}</span>
-              </div>
-              <div class="mc-split">
-                <div class="mc-split-h" style="width:{h_prob:.1f}%;background:{home_bg};"></div>
-                <div class="mc-split-a" style="width:{a_prob:.1f}%;background:{away_bg};"></div>
-              </div>
-              <div class="mc-split-labels">
-                <span><span class="hl">{team_abbr(home)}</span> {home_pct_label}</span>
-                <span>{away_pct_label} <span class="hl">{team_abbr(away)}</span></span>
-              </div>
-            </div>
-            <div class="mc-tip-r">
-              <div class="mc-margin">{c['margin']:.0f}</div>
-              <div class="mc-margin-unit">PTS</div>
-              <div class="mc-agree-chip" style="color:{tip_bg if tip_bg != '#FFFFFF' and tip_bg != '#000000' else 'var(--accent)'};">
+            <div class="mc-tip-lbl">Our Prediction</div>
+            <div class="mc-tip-chip-row">
+              {team_chip(c['team'], size="lg")}
+              <span class="conf-chip {conf_tier}">{conf_label}</span>
+              <span class="mc-agree-chip" style="color:{tip_bg if tip_bg != '#FFFFFF' and tip_bg != '#000000' else 'var(--accent)'};">
                 ▲ {agree_pct}% AGREE
-              </div>
+              </span>
+            </div>
+            <div class="mc-split">
+              <div class="mc-split-h" style="width:{h_prob:.1f}%;background:{home_bg};"></div>
+              <div class="mc-split-a" style="width:{a_prob:.1f}%;background:{away_bg};"></div>
+            </div>
+            <div class="mc-split-labels">
+              <span><span class="hl">{team_abbr(home)}</span> {home_pct_label}</span>
+              <span>{away_pct_label} <span class="hl">{team_abbr(away)}</span></span>
             </div>
           </div>
           {status_banner_html}
@@ -4702,7 +4692,6 @@ st.markdown("""
     .mc{margin:0 12px 14px!important;}
     .mc-tip{padding:12px 12px!important;}
     .mc-meta{padding:12px 12px 14px!important; gap:8px!important;}
-    .mc-margin{font-size:1.5rem!important;}
     .mc-meta-v{font-size:0.86rem!important;}
     .mc-tip-name{font-size:0.78rem!important;}
 
@@ -4767,7 +4756,6 @@ st.markdown("""
     .hero-t-big{font-size:2.4rem!important;}
     .hero-t-rnd-num{font-size:2rem!important;}
     .hts-num{font-size:0.86rem!important;}
-    .mc-margin{font-size:1.3rem!important;}
     .term-nav-brand{font-size:0.6rem!important;}
 }
 

@@ -564,6 +564,7 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .sc-m{background:rgba(251,191,36,0.08);border-color:rgba(251,191,36,0.28);color:var(--amber);}
 .sc-w{background:var(--rdim);border-color:rgba(248,113,113,0.25);color:var(--red);}
 .sc-e{background:rgba(255,255,255,0.02);border-color:var(--border);color:var(--text3);}
+.sc-d{background:linear-gradient(135deg,rgba(52,211,153,0.18),rgba(34,211,238,0.18));border-color:rgba(34,211,238,0.45);color:var(--accent3);box-shadow:0 0 6px rgba(34,211,238,0.25);}
 .sc-sum{margin-top:6px;padding-top:6px;border-top:1px solid var(--border);}
 .sc-legend{display:flex;align-items:center;gap:14px;padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--border);font-family:var(--mono);font-size:0.5rem;color:var(--text2);letter-spacing:0.1em;text-transform:uppercase;font-weight:600;overflow-x:auto;scrollbar-width:none;}
 .sc-legend::-webkit-scrollbar{display:none;}
@@ -850,6 +851,10 @@ DAY_FULL = {"Thu": "Thursday", "Fri": "Friday", "Sat": "Saturday", "Sun": "Sunda
 # MODELS & PREDICTION
 # ════════════════════════════════════════════════════════════════════════════
 def rank_models(games_subset, all_tips, sources):
+    """Rank tipping models by historical accuracy.
+    AFL tipping convention: a drawn game (hscore == ascore) credits every
+    tipper who picked either side. So when we compute a model's historical
+    hit rate, we treat draws as a hit for every tip on that game."""
     gmap = {g["id"]: g for g in games_subset}
     stats = defaultdict(lambda: {"correct": 0, "total": 0})
     seen = set()
@@ -863,7 +868,8 @@ def rank_models(games_subset, all_tips, sources):
             continue
         model = sources[sid]
         stats[model]["total"] += 1
-        if str(tip.get("tip", "")).strip().lower() == actual.strip().lower():
+        # Drawn game = correct tip for every tipper, by AFL convention.
+        if actual == "Draw" or str(tip.get("tip", "")).strip().lower() == actual.strip().lower():
             stats[model]["correct"] += 1
     rows, weights = [], {}
     for model, s in stats.items():
@@ -932,6 +938,13 @@ def build_prediction(game, tips, sources, top_models, weights):
 # TRACKER
 # ════════════════════════════════════════════════════════════════════════════
 def get_tracker(year, current_round, sources):
+    """Walk every completed game, attach our prediction, record correctness.
+
+    AFL TIPPING CONVENTION: a drawn game (hscore == ascore) is a correct tip
+    for either team picked. We record it with `correct=True` and an
+    `is_draw=True` flag so downstream analytics (strike rate, streaks,
+    last-10, calibration, scorecard, awards, etc.) all count it properly,
+    while specific UI surfaces can still show "DRAW" labels where helpful."""
     ag = get_all_games(year)
     at = get_all_tips(year)
     results = []
@@ -947,8 +960,9 @@ def get_tracker(year, current_round, sources):
             if not c:
                 continue
             actual = get_actual_result(game)
-            if actual is None or actual == "Draw":
+            if actual is None:
                 continue
+            is_draw = (actual == "Draw")
             try:
                 hscore = float(game["hscore"])
                 ascore = float(game["ascore"])
@@ -959,12 +973,11 @@ def get_tracker(year, current_round, sources):
 
             tip_margin = c["margin"]  # always positive — predicted margin for the tipped side
             tipped_home = (c["team"] == game["hteam"])
-            tip_correct = c["team"].strip().lower() == actual.strip().lower()
+            # AFL convention: draw = correct tip regardless of which side was picked.
+            tip_correct = is_draw or (c["team"].strip().lower() == actual.strip().lower())
 
             # Signed actual margin from the tipped team's perspective:
-            # +N if tipped team won by N, -N if tipped team lost by N.
-            # This is what the prediction was actually *aimed at* — comparing
-            # |tip_margin - actual_signed| gives the true directional error.
+            # +N if tipped team won by N, -N if tipped team lost by N, 0 for draw.
             actual_margin_signed = None
             if hscore is not None and ascore is not None:
                 home_diff = hscore - ascore  # +ve if home won
@@ -995,6 +1008,7 @@ def get_tracker(year, current_round, sources):
                 "home": game["hteam"], "away": game["ateam"],
                 "tip": c["team"], "actual": actual,
                 "correct": tip_correct,
+                "is_draw": is_draw,
                 "margin": tip_margin,
                 "actual_margin": actual_margin,                  # absolute (closeness of game)
                 "actual_margin_signed": actual_margin_signed,    # from tipped team's POV
@@ -1060,6 +1074,11 @@ def teams_named_status(games):
 # SEASON ANALYTICS — for the premium scorecard
 # ════════════════════════════════════════════════════════════════════════════
 def season_highlights(tracker):
+    """Top headline cards. Draws are excluded from these specifically because:
+      - "tightest call" — a draw has actual_margin=0 and would always win,
+        but a draw isn't really a tight call we *nailed*; it's neutral.
+      - "sharpest call" / "biggest miss" — we want clearly correct/wrong tips.
+    Draws still count as correct everywhere else (strike rate, streak, etc.)."""
     flat = []
     for r in tracker:
         for g in r["games"]:
@@ -1068,8 +1087,9 @@ def season_highlights(tracker):
             flat.append({**g, "round": r.get("round")})
     if not flat:
         return {}
-    correct = [g for g in flat if g["correct"]]
-    wrong = [g for g in flat if not g["correct"]]
+    non_draw = [g for g in flat if not g.get("is_draw", False)]
+    correct = [g for g in non_draw if g["correct"]]
+    wrong = [g for g in non_draw if not g["correct"]]
     out = {}
     if correct:
         out["best_pred"] = min(correct, key=lambda g: g["margin_error"])
@@ -1188,9 +1208,14 @@ def dow_breakdown(tracker):
 
 def margin_bias(tracker):
     """Mean signed margin error: +ve = we overestimate margins (blowout bias),
-    -ve = we underestimate (cautious bias). Only counted on correctly-tipped games."""
+    -ve = we underestimate (cautious bias). Only counted on correctly-tipped games.
+
+    Excludes draws — a draw has actual margin 0, so the predicted margin would
+    always read as a giant over-estimate that doesn't reflect a real model
+    bias, just the unusual nature of a drawn result."""
     signed = [g["margin_error_signed"] for r in tracker for g in r["games"]
-              if g.get("margin_error_signed") is not None and g.get("correct")]
+              if g.get("margin_error_signed") is not None and g.get("correct")
+              and not g.get("is_draw", False)]
     if not signed:
         return None
     return sum(signed) / len(signed)
@@ -1376,9 +1401,12 @@ def detect_big_moment(tracker, current_round=None):
 
     # 2) Big call hit last round — a single game where we backed an underdog
     # (low confidence) and they won. Scope: one specific game, not the round.
+    # Excludes draws — a draw isn't really backing the underdog and winning,
+    # it's the game playing out neutrally.
     if last_completed:
         underdog_hits = [g for g in last_completed["games"]
-                         if g.get("correct") and g.get("confidence", 100) < 55]
+                         if g.get("correct") and g.get("confidence", 100) < 55
+                         and not g.get("is_draw", False)]
         if underdog_hits:
             # Rank by "upset size" — the bigger the actual margin, the gutsier the call
             best_upset = max(underdog_hits, key=lambda g: g.get("actual_margin") or 0)
@@ -1477,14 +1505,15 @@ def trust_brackets(tracker):
 # ════════════════════════════════════════════════════════════════════════════
 def rhythm_dots_svg(tracker, max_dots=120):
     """Render a grid of tiny dots, one per tip this season.
-    Green = correct, red = wrong. Oldest top-left → newest bottom-right.
+    Green = correct win, cyan = drawn game (correct by AFL convention),
+    red = wrong tip. Oldest top-left → newest bottom-right.
     Each dot does a slow staggered breath; a thin scanning cursor sweeps the
     grid every ~9s; the latest dot wears a halo to anchor "now" in the chart.
     """
     dots = []
     for r in tracker:
         for g in r["games"]:
-            dots.append(g.get("correct", False))
+            dots.append({"correct": g.get("correct", False), "is_draw": g.get("is_draw", False)})
     dots = dots[-max_dots:]
 
     if not dots:
@@ -1499,17 +1528,24 @@ def rhythm_dots_svg(tracker, max_dots=120):
     h = rows * (size + gap) - gap
 
     cells = []
-    for i, correct in enumerate(dots):
+    for i, d in enumerate(dots):
+        correct = d["correct"]
+        is_draw = d["is_draw"]
         row = i // cols
         col = i % cols
         x = col * (size + gap)
         y = row * (size + gap)
-        fill = "#34d399" if correct else "#f87171"
-        base_op = 0.92 if correct else 0.78
+        # Draws use cyan so a punter can spot them at a glance,
+        # while still visibly being on the "correct" side of the chart.
+        if is_draw:
+            fill = "#22d3ee"
+            base_op = 0.88
+        else:
+            fill = "#34d399" if correct else "#f87171"
+            base_op = 0.92 if correct else 0.78
         # Stagger each dot's breath by its column index so the breath ripples
         # left-to-right rather than blinking everything at once.
         breath_delay = (col * 0.18) % 4.0
-        cx = x + size / 2; cy = y + size / 2
         cells.append(
             f'<rect x="{x}" y="{y}" width="{size}" height="{size}" rx="1.5" '
             f'fill="{fill}" opacity="{base_op}">'
@@ -1532,12 +1568,15 @@ def rhythm_dots_svg(tracker, max_dots=120):
 
     # Latest dot — a halo ring + glow on the most recent tip to anchor "now"
     last_idx = n - 1
-    last_correct = dots[last_idx]
+    last = dots[last_idx]
     last_row = last_idx // cols
     last_col = last_idx % cols
     last_cx = last_col * (size + gap) + size / 2
     last_cy = last_row * (size + gap) + size / 2
-    halo_color = "#34d399" if last_correct else "#f87171"
+    if last["is_draw"]:
+        halo_color = "#22d3ee"
+    else:
+        halo_color = "#34d399" if last["correct"] else "#f87171"
     halo = (
         f'<circle cx="{last_cx}" cy="{last_cy}" r="{size/2 + 2}" fill="none" '
         f'stroke="{halo_color}" stroke-width="1" opacity="0.5">'
@@ -1746,6 +1785,9 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
         # ── PREDICTION STATUS BANNER — slim single-row strip shown for live
         # and final games. Tells punters at a glance whether their tip is on
         # track, slipping, correct, or wrong. Sits above the meta footer.
+        # AFL convention: drawn final = correct tip (green banner), with
+        # explicit "DRAW · TIP CORRECT" wording so the punter sees both
+        # what happened and why their tip stands.
         status_banner_html = ""
         if status in ("live", "final"):
             home_diff = live_hscore - live_ascore
@@ -1774,8 +1816,9 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
                         f"{tipped_abbr_local} lost by {actual_diff}",
                     )
                 else:
+                    # Draw — AFL convention says the tip stands. Show green.
                     status_banner_html = _banner(
-                        "draw", "◐", "DRAW",
+                        "correct", "✓", "DRAW · TIP CORRECT",
                         f"{live_hscore}–{live_ascore}",
                     )
             else:
@@ -2296,9 +2339,12 @@ def render_stadium_insights(tracker):
 def render_slipped(tracker):
     """Forensic loss attribution — surface the most painful misses.
     Three angles: highest-confidence loss, closest loss, biggest margin gap.
-    Frames losses as instructive data, not penance."""
+    Frames losses as instructive data, not penance.
 
-    losses = [g for r in tracker for g in r["games"] if not g["correct"] and g["actual"] != "Draw"]
+    Note: draws are NOT losses in this app — `g["correct"]` is True for them
+    by AFL convention — so they naturally won't appear here."""
+
+    losses = [g for r in tracker for g in r["games"] if not g["correct"] and not g.get("is_draw", False)]
     if not losses:
         return
 
@@ -2488,9 +2534,11 @@ def render_team_intel(tracker):
                 # don't declare a directional bias. One or two blowouts on a
                 # small sample can swing the mean by 15+ points and would
                 # mislead punters into thinking the model has a systematic
-                # bias when it's really just noise.
+                # bias when it's really just noise. Excludes draws (which
+                # have actual_margin=0 and would distort the bias signal).
                 bias_sample = sum(1 for r in tracker for g in r["games"]
-                                  if g.get("margin_error_signed") is not None and g.get("correct"))
+                                  if g.get("margin_error_signed") is not None and g.get("correct")
+                                  and not g.get("is_draw", False))
                 MIN_BIAS_SAMPLE = 10
                 if bias_sample < MIN_BIAS_SAMPLE:
                     bias_label = "READING IN"
@@ -2829,10 +2877,13 @@ def render_rhythm(tracker):
     # Latest tip context — what was the most recent result?
     last_round_no = None
     last_correct = None
+    last_is_draw = False
     for r in reversed(tracker):
         if r["games"]:
             last_round_no = r["round"]
-            last_correct = r["games"][-1]["correct"]
+            last_g = r["games"][-1]
+            last_correct = last_g["correct"]
+            last_is_draw = last_g.get("is_draw", False)
             break
 
     # Current streak — quick hand-roll, since we want the kind too
@@ -2853,8 +2904,17 @@ def render_rhythm(tracker):
 
     streak_color = "var(--green)" if streak_kind == "W" else "var(--red)"
     streak_label = f"{streak_n}{streak_kind}" if streak_kind else "—"
-    last_glyph = "✓" if last_correct else "✗"
-    last_glyph_color = "var(--green)" if last_correct else "var(--red)"
+    # If the most recent tip was a draw, show a cyan ◐ glyph to flag it
+    # while keeping the "correct" colour family (draws count as hits).
+    if last_is_draw:
+        last_glyph = "◐"
+        last_glyph_color = "var(--accent3)"
+    elif last_correct:
+        last_glyph = "✓"
+        last_glyph_color = "var(--green)"
+    else:
+        last_glyph = "✗"
+        last_glyph_color = "var(--red)"
     last_lbl = f"R{last_round_no:02d}" if last_round_no is not None else "—"
 
     st.markdown(_h(f"""
@@ -2877,6 +2937,7 @@ def render_rhythm(tracker):
       <div class="rhythm-foot">
         <span class="rhythm-foot-l">
           <span class="rhythm-legend-item"><span class="rhythm-sw rhythm-sw-w"></span>HIT</span>
+          <span class="rhythm-legend-item"><span class="rhythm-sw rhythm-sw-d"></span>DRAW</span>
           <span class="rhythm-legend-item"><span class="rhythm-sw rhythm-sw-l"></span>MISS</span>
           <span class="rhythm-legend-item"><span class="rhythm-sw rhythm-sw-now"></span>LATEST</span>
         </span>
@@ -2892,6 +2953,12 @@ def render_rhythm(tracker):
 # RENDER: SCORECARD GRID (tip accuracy)
 # ════════════════════════════════════════════════════════════════════════════
 def render_scorecard(tracker_data):
+    """Round-by-round grid. Draws use the new cyan `sc-d` cell so a punter can
+    see at a glance which cells were drawn games — they still count as
+    correct (towards the strike rate at the bottom) but read as 'D' rather
+    than the team abbreviation, and tooltip says 'DRAW (correct by AFL
+    convention)'. The bottom summary row totals correct/played which now
+    include draws naturally because tracker has them as correct=True."""
     tc = sum(g["correct"] for r in tracker_data for g in r["games"])
     tp = sum(len(r["games"]) for r in tracker_data)
     tw = tp - tc
@@ -2910,9 +2977,15 @@ def render_scorecard(tracker_data):
             rg = rnd["games"]
             if gi < len(rg):
                 g = rg[gi]
-                css = "sc-c" if g["correct"] else "sc-w"
-                abbr = team_abbr(g["tip"])
-                rows += f'<div class="sc-cell {css}" title="{g["game"]} · Tip: {g["tip"]} · Result: {g["actual"]}">{abbr}</div>'
+                if g.get("is_draw"):
+                    css = "sc-d"
+                    label = "D"
+                    title = f'{g["game"]} · Tip: {g["tip"]} · Result: DRAW (correct by AFL convention)'
+                else:
+                    css = "sc-c" if g["correct"] else "sc-w"
+                    label = team_abbr(g["tip"])
+                    title = f'{g["game"]} · Tip: {g["tip"]} · Result: {g["actual"]}'
+                rows += f'<div class="sc-cell {css}" title="{title}">{label}</div>'
             else:
                 rows += '<div class="sc-cell sc-e">·</div>'
         rows += "</div>"
@@ -2948,6 +3021,10 @@ def render_scorecard(tracker_data):
 # RENDER: MARGIN SCORECARD
 # ════════════════════════════════════════════════════════════════════════════
 def render_margin_scorecard(tracker_data):
+    """Margin-error grid by round. For drawn games the actual margin is 0 and
+    the tooltip explicitly says 'DRAW (correct by AFL convention)'. The
+    error magnitude is still shown — even on a draw, the model's predicted
+    margin gap from zero is informative for calibration."""
     all_games = [g for r in tracker_data for g in r["games"] if g.get("margin_error") is not None]
     if not all_games:
         return
@@ -2989,7 +3066,9 @@ def render_margin_scorecard(tracker_data):
                     tip_abbr = team_abbr(g.get("tip", ""))
                     if am_signed is None:
                         am_signed = 0
-                    if am_signed >= 0:
+                    if g.get("is_draw"):
+                        actual_phrase = "DRAW (correct by AFL convention)"
+                    elif am_signed >= 0:
                         actual_phrase = f"{tip_abbr} won by {am_signed:.0f}"
                     else:
                         actual_phrase = f"{tip_abbr} LOST by {abs(am_signed):.0f}"
@@ -3321,6 +3400,7 @@ st.markdown("""
 .rhythm-sw{width:8px;height:8px;border-radius:1.5px;display:inline-block;}
 .rhythm-sw-w{background:#34d399;}
 .rhythm-sw-l{background:#f87171;}
+.rhythm-sw-d{background:#22d3ee;box-shadow:0 0 4px rgba(34,211,238,0.45);}
 .rhythm-body{padding:12px;display:flex;justify-content:center;overflow-x:auto;scrollbar-width:none;}
 .rhythm-body::-webkit-scrollbar{display:none;}
 .rhythm-foot{

@@ -167,6 +167,328 @@ def ladder_mini(team_name, standings_lookup):
         f'</span>'
     )
 
+# ════════════════════════════════════════════════════════════════════════════
+# TEAM SELECTIONS (Footywire) — ins/outs with team-relative price percentile
+# ════════════════════════════════════════════════════════════════════════════
+# Scrapes Footywire's team selections page + AFL Fantasy rankings page.
+# Joins them on slug ("{team}--{player}") and gives every player a price_pct
+# from 0.0 (cheapest) to 1.0 (most expensive) within their team — that's the
+# fill level for each progress bar in the match cards.
+#
+# Cached for 1 hour via @st.cache_data so we hit Footywire at most once per
+# user-session per round. Degrades gracefully if bs4/requests are missing
+# from the environment, so a fresh Community Cloud deploy doesn't blow up
+# before requirements.txt is updated.
+
+# Footywire team-slug → Squiggle/app-canonical team name
+FW_TEAM_SLUG_TO_NAME = {
+    "adelaide-crows":           "Adelaide",
+    "brisbane-lions":           "Brisbane Lions",
+    "carlton-blues":            "Carlton",
+    "collingwood-magpies":      "Collingwood",
+    "essendon-bombers":         "Essendon",
+    "fremantle-dockers":        "Fremantle",
+    "geelong-cats":             "Geelong",
+    "gold-coast-suns":          "Gold Coast",
+    "greater-western-sydney-giants": "GWS Giants",
+    "gws-giants":               "GWS Giants",
+    "hawthorn-hawks":           "Hawthorn",
+    "melbourne-demons":         "Melbourne",
+    "north-melbourne-kangaroos":"North Melbourne",
+    "port-adelaide-power":      "Port Adelaide",
+    "richmond-tigers":          "Richmond",
+    "st-kilda-saints":          "St Kilda",
+    "sydney-swans":             "Sydney",
+    "west-coast-eagles":        "West Coast",
+    "western-bulldogs":         "Western Bulldogs",
+}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_team_selections():
+    """Returns a dict keyed by frozenset({home, away}) → {
+        'home_name': str, 'away_name': str,
+        'home': {'ins': [{'name', 'fill'}], 'outs': [...]},
+        'away': {...},
+    }
+    Returns {} if the scrape fails for any reason. Fully resilient — never
+    raises into the Streamlit run loop."""
+    try:
+        import requests as _req
+        from bs4 import BeautifulSoup as _BS  # noqa: F401
+    except ImportError:
+        return {}
+
+    # Local imports of the parsing internals — these live in this same file
+    # below the helper functions, but we wrap the whole pipeline in try/except
+    # so any unexpected scraper change just falls back to "no data" rather
+    # than crashing the app.
+    try:
+        sel_html = _fw_fetch("https://www.footywire.com/afl/footy/afl_team_selections")
+        rank_html = _fw_fetch("https://www.footywire.com/afl/footy/dream_team_season")
+        if not sel_html or not rank_html:
+            return {}
+        rankings = _fw_parse_rankings(rank_html)
+        _fw_compute_team_pcts(rankings)
+        matches = _fw_parse_selections(sel_html)
+        _fw_enrich(matches, rankings)
+    except Exception:
+        return {}
+
+    # Reshape into the lookup format the renderer expects
+    out = {}
+    for m in matches:
+        if not m.get("home") or not m.get("away"):
+            continue
+        h_name = FW_TEAM_SLUG_TO_NAME.get(m["home"]["team_slug"])
+        a_name = FW_TEAM_SLUG_TO_NAME.get(m["away"]["team_slug"])
+        if not h_name or not a_name:
+            continue
+
+        def _shape(side):
+            return {
+                "ins":  [{"name": _fw_display_name(p), "fill": p.get("price_pct")}
+                         for p in side.get("ins", [])],
+                "outs": [{"name": _fw_display_name(p), "fill": p.get("price_pct")}
+                         for p in side.get("outs", [])],
+            }
+
+        key = frozenset({canonical(h_name), canonical(a_name)})
+        out[key] = {
+            "home_name": h_name,
+            "away_name": a_name,
+            "home": _shape(m["home"]),
+            "away": _shape(m["away"]),
+        }
+    return out
+
+def _fw_fetch(url):
+    """Light wrapper around requests.get — returns text or None."""
+    try:
+        import requests as _req
+        resp = _req.get(url, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/124.0.0.0 Safari/537.36"),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-AU,en;q=0.9",
+        }, timeout=20)
+        resp.raise_for_status()
+        return resp.text
+    except Exception:
+        return None
+
+def _fw_display_name(player):
+    """Use the rankings-page full name if we got a match; otherwise the
+    selections-page short form (e.g. 'D Moore'). Either way, it's the name
+    only — no salary, no rank, just the player."""
+    return player.get("full_name") or player.get("name") or ""
+
+# ── selections-page parsing (mirrors the standalone scraper, inlined) ──
+import re as _fw_re
+
+_FW_SEL_LINK = _fw_re.compile(r"\bpp-([a-z0-9\-]+?)--([a-z0-9\-]+)", _fw_re.IGNORECASE)
+_FW_RANK_LINK = _fw_re.compile(r"\bpr-([a-z0-9\-]+?)--([a-z0-9\-]+)", _fw_re.IGNORECASE)
+_FW_SECTION_LABELS = {"Interchange", "Emergencies", "Ins", "Outs"}
+_FW_MATCH_HEADER = _fw_re.compile(r"^\s*[A-Za-z\.\s'\-]+\s+v\s+[A-Za-z\.\s'\-]+\s*\(.+\)\s*$")
+_FW_PRICE = _fw_re.compile(r"\$\s*[\d,]+")
+_FW_NUMBER = _fw_re.compile(r"-?\d+(?:\.\d+)?")
+
+def _fw_direct_rows(table):
+    container = table.find("tbody", recursive=False) or table
+    rows = []
+    for tr in container.find_all("tr", recursive=False):
+        nested = False
+        for parent in tr.parents:
+            if parent is container:
+                break
+            if parent.name == "table":
+                nested = True
+                break
+        if not nested:
+            rows.append(tr)
+    return rows
+
+def _fw_parse_price(text):
+    m = _FW_PRICE.search(text or "")
+    if not m:
+        return None
+    digits = _fw_re.sub(r"[^\d]", "", m.group(0))
+    return int(digits) if digits else None
+
+def _fw_parse_rankings(html):
+    """Returns dict slug → {full_name, team_slug, price, ...}."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")  # html.parser to avoid lxml dep
+    out = {}
+    for tr in soup.find_all("tr", id=_fw_re.compile(r"^rowpid_\d+")):
+        link = tr.find("a", href=_FW_RANK_LINK)
+        if not link:
+            continue
+        m = _FW_RANK_LINK.search(link.get("href", "") or "")
+        if not m:
+            continue
+        team_slug, player_slug = m.group(1).lower(), m.group(2).lower()
+        full_name = link.get_text(strip=True)
+
+        cells = tr.find_all("td", recursive=False)
+        price = None
+        if len(cells) >= 8:
+            price = _fw_parse_price(cells[4].get_text(" ", strip=True))
+
+        out[f"{team_slug}--{player_slug}"] = {
+            "slug": f"{team_slug}--{player_slug}",
+            "full_name": full_name,
+            "team_slug": team_slug,
+            "price": price,
+        }
+    return out
+
+def _fw_compute_team_pcts(rankings):
+    """Mutates each entry in `rankings` to add price_pct (1.0 = most expensive
+    in their team, 0.0 = cheapest)."""
+    by_team = {}
+    for entry in rankings.values():
+        if entry.get("price") is None:
+            continue
+        by_team.setdefault(entry["team_slug"], []).append(entry)
+
+    for team_slug, entries in by_team.items():
+        entries.sort(key=lambda e: -(e.get("price") or 0))
+        size = len(entries)
+        for i, e in enumerate(entries):
+            e["price_pct"] = 1.0 if size == 1 else 1.0 - i / (size - 1)
+
+def _fw_is_side_panel(table):
+    headings = set()
+    for tr in _fw_direct_rows(table):
+        b = tr.find("b")
+        if b:
+            label = b.get_text(strip=True)
+            if label in _FW_SECTION_LABELS:
+                headings.add(label)
+    return "Interchange" in headings and bool(headings & {"Ins", "Outs"})
+
+def _fw_parse_side_panel(panel):
+    current_section = None
+    buckets = {label: [] for label in _FW_SECTION_LABELS}
+    team_slug = None
+
+    for tr in _fw_direct_rows(panel):
+        b = tr.find("b")
+        if b and b.get_text(strip=True) in _FW_SECTION_LABELS:
+            current_section = b.get_text(strip=True)
+            continue
+        link = tr.find("a", href=_FW_SEL_LINK)
+        if link and current_section:
+            href = link.get("href", "") or ""
+            mm = _FW_SEL_LINK.search(href)
+            if not mm:
+                continue
+            t_slug, p_slug = mm.group(1).lower(), mm.group(2).lower()
+            if team_slug is None:
+                team_slug = t_slug
+            name = link.get_text(strip=True)
+            if name:
+                buckets[current_section].append({
+                    "name": name,
+                    "slug": f"{t_slug}--{p_slug}",
+                })
+    if not team_slug:
+        return None
+    return {
+        "team_slug": team_slug,
+        "ins":  buckets["Ins"],
+        "outs": buckets["Outs"],
+    }
+
+def _fw_parse_selections(html):
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+
+    side_panel_set = set()
+    for t in soup.find_all("table"):
+        if _fw_is_side_panel(t):
+            side_panel_set.add(id(t))
+
+    events = []
+    seen_panel_ids = set()
+    for el in soup.find_all(["td", "table"]):
+        if el.name == "td":
+            text = el.get_text(" ", strip=True)
+            if (text and len(text) < 120 and " v " in text and "(" in text
+                    and "Team Selections" not in text
+                    and _FW_MATCH_HEADER.match(text)):
+                events.append(("match", text))
+            continue
+        if id(el) in side_panel_set and id(el) not in seen_panel_ids:
+            ancestor_is_panel = any(
+                p.name == "table" and id(p) in side_panel_set for p in el.parents
+            )
+            if ancestor_is_panel:
+                continue
+            seen_panel_ids.add(id(el))
+            events.append(("panel", el))
+
+    matches = []
+    current = None
+    side_buffer = []
+
+    def _flush():
+        nonlocal current
+        if current is None:
+            return
+        if len(side_buffer) >= 1:
+            current["home"] = side_buffer[0]
+        if len(side_buffer) >= 2:
+            current["away"] = side_buffer[1]
+        matches.append(current)
+
+    for kind, payload in events:
+        if kind == "match":
+            _flush()
+            current = {"match": payload, "home": None, "away": None}
+            side_buffer = []
+        elif kind == "panel" and current is not None:
+            parsed = _fw_parse_side_panel(payload)
+            if parsed is None:
+                continue
+            if side_buffer and parsed["team_slug"] == side_buffer[-1]["team_slug"]:
+                continue
+            if len(side_buffer) >= 2:
+                continue
+            side_buffer.append(parsed)
+    _flush()
+    return matches
+
+def _fw_enrich(matches, rankings):
+    for m in matches:
+        for side_key in ("home", "away"):
+            side = m.get(side_key)
+            if not side:
+                continue
+            for bucket_name in ("ins", "outs"):
+                for entry in side.get(bucket_name, []):
+                    r = rankings.get(entry["slug"])
+                    if r is None:
+                        continue
+                    entry["full_name"] = r.get("full_name")
+                    entry["price_pct"] = r.get("price_pct")
+
+def get_selections_for_game(home_name, away_name, selections_data):
+    """Look up a single match's ins/outs by team names. Returns None if no
+    Footywire data exists for this game (i.e. teams not yet named)."""
+    if not selections_data:
+        return None
+    key = frozenset({canonical(home_name), canonical(away_name)})
+    record = selections_data.get(key)
+    if not record:
+        return None
+    # The Footywire scraper's "home" might actually be our "away" depending
+    # on the source ordering — match by canonical name to swap if needed.
+    if canonical(record["home_name"]) == canonical(home_name):
+        return {"home": record["home"], "away": record["away"]}
+    return {"home": record["away"], "away": record["home"]}
+
 st.set_page_config(
     page_title="AFL // Terminal",
     page_icon="🏉",
@@ -1623,6 +1945,120 @@ def sparkline_svg(values, width=180, height=22, stroke="#4f8fff"):
 # ════════════════════════════════════════════════════════════════════════════
 # RENDER: TIPS
 # ════════════════════════════════════════════════════════════════════════════
+def render_team_selections_block(home, away, selections_data,
+                                 home_bg, away_bg):
+    """Renders the ins/outs panel that sits between the team header and the
+    'Our Prediction' block on each match card.
+
+    Layout: two columns (HOME · AWAY), each with two stacked sub-sections —
+    INS (green-tinted) and OUTS (red-tinted). Each player gets a row with
+    their name on the left and a thin gradient progress bar on the right;
+    bar fill = the player's team-relative AFL Fantasy price percentile
+    (1.0 = most expensive, 0.0 = cheapest), so a high-fill bar in OUTS means
+    a key player has been dropped, and high-fill in INS means a key player
+    has returned.
+
+    Returns the disclaimer banner instead when no Footywire data exists for
+    this matchup yet (e.g. teams haven't been named for the round)."""
+
+    record = get_selections_for_game(home, away, selections_data)
+    if record is None:
+        # Per-card "teams not yet named" disclaimer — replaces the round-wide
+        # banner that used to sit at the top of the tab.
+        return _h(f"""
+        <div class="mc-sel-pending">
+          <div class="mc-sel-pending-glyph">[ ! ]</div>
+          <div class="mc-sel-pending-body">
+            <div class="mc-sel-pending-k">TEAM LISTS NOT YET NAMED</div>
+            <div class="mc-sel-pending-v">Prediction assumes both squads at full strength · ins/outs unknown</div>
+          </div>
+        </div>
+        """)
+
+    def _row_html(player, bg_color, accent_color, kind):
+        """Single player row — name on the left, progress bar on the right."""
+        fill = player.get("fill")
+        if fill is None:
+            # Player wasn't in the rankings table (rookie or hasn't played in
+            # 2026 yet) — show a muted placeholder bar and a dash for the name
+            # area to keep alignment.
+            bar_inner = ('<div class="mc-sel-bar-fill mc-sel-bar-fill-unknown" '
+                         'style="width:8%;"></div>')
+            extra_class = " mc-sel-row-unknown"
+        else:
+            pct = max(0.0, min(1.0, fill)) * 100
+            # Gradient direction reads naturally for both — INS uses green→team
+            # accent (positive arrival), OUTS uses team accent→red (loss).
+            if kind == "in":
+                grad = (f"linear-gradient(90deg, rgba(52,211,153,0.6), "
+                        f"{accent_color})")
+            else:
+                grad = (f"linear-gradient(90deg, {accent_color}, "
+                        f"rgba(248,113,113,0.7))")
+            bar_inner = (f'<div class="mc-sel-bar-fill" '
+                         f'style="width:{pct:.0f}%;background:{grad};"></div>')
+            extra_class = ""
+
+        name = player.get("name") or "—"
+        return (f'<div class="mc-sel-row{extra_class}">'
+                f'<div class="mc-sel-name">{name}</div>'
+                f'<div class="mc-sel-bar"><div class="mc-sel-bar-track">{bar_inner}</div></div>'
+                f'</div>')
+
+    def _side_html(team_name, side_data, bg_color):
+        ins  = side_data.get("ins")  or []
+        outs = side_data.get("outs") or []
+
+        ins_rows  = "".join(_row_html(p, bg_color, bg_color, "in")  for p in ins)
+        outs_rows = "".join(_row_html(p, bg_color, bg_color, "out") for p in outs)
+
+        ins_block  = (f'<div class="mc-sel-section mc-sel-ins">'
+                      f'<div class="mc-sel-section-head">'
+                      f'<span class="mc-sel-section-glyph">▲</span>'
+                      f'<span class="mc-sel-section-lbl">IN</span>'
+                      f'<span class="mc-sel-section-n">{len(ins)}</span>'
+                      f'</div>'
+                      f'<div class="mc-sel-rows">{ins_rows}</div>'
+                      f'</div>') if ins else ""
+
+        outs_block = (f'<div class="mc-sel-section mc-sel-outs">'
+                      f'<div class="mc-sel-section-head">'
+                      f'<span class="mc-sel-section-glyph">▼</span>'
+                      f'<span class="mc-sel-section-lbl">OUT</span>'
+                      f'<span class="mc-sel-section-n">{len(outs)}</span>'
+                      f'</div>'
+                      f'<div class="mc-sel-rows">{outs_rows}</div>'
+                      f'</div>') if outs else ""
+
+        if not ins_block and not outs_block:
+            inner = '<div class="mc-sel-empty">no changes</div>'
+        else:
+            inner = ins_block + outs_block
+
+        return (f'<div class="mc-sel-side">'
+                f'<div class="mc-sel-side-head" style="border-color:{bg_color};">'
+                f'<span class="mc-sel-side-bar" style="background:{bg_color};"></span>'
+                f'<span class="mc-sel-side-name">{team_name.upper()}</span>'
+                f'</div>'
+                f'{inner}'
+                f'</div>')
+
+    home_html = _side_html(home, record["home"], home_bg)
+    away_html = _side_html(away, record["away"], away_bg)
+
+    return _h(f"""
+    <div class="mc-sel">
+      <div class="mc-sel-head">
+        <span class="mc-sel-head-glyph">⌬</span>
+        <span class="mc-sel-head-lbl">Team Lists · Ins / Outs</span>
+      </div>
+      <div class="mc-sel-cols">
+        {home_html}
+        {away_html}
+      </div>
+    </div>
+    """)
+
 def render_tips(games, tips, sources, top_models, weights, rnd,
                 standings_lookup=None, all_season_games=None):
     standings_lookup = standings_lookup or {}
@@ -1646,6 +2082,12 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
         p = build_prediction(g, tips, sources, top_models, weights)
         if p:
             predictions_by_id[g["id"]] = p
+
+    # Fetch the round's team selections (ins/outs + price percentiles) once.
+    # Cached for an hour, so this hits the network at most once per session
+    # per round. Returns {} on any failure — the renderer falls back to the
+    # "TEAM LISTS NOT YET NAMED" disclaimer per-card in that case.
+    selections_data = fetch_team_selections()
 
     # Round Edge panel (safest bet / value play / upset watch / coin flip) — sits above the cards
     render_round_edge([g for _, g in sortable], predictions_by_id, standings_lookup)
@@ -1878,6 +2320,7 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
               <div class="mc-mt-prob" style="color:{a_prob_color};border-color:{a_border};">{away_pct_label}</div>
             </div>
           </div>
+          {render_team_selections_block(home, away, selections_data, home_bg, away_bg)}
           <div class="mc-tip">
             <div class="mc-tip-lbl">Our Prediction</div>
             <div class="mc-tip-chip-row">
@@ -3197,6 +3640,166 @@ st.markdown("""
 .sc-divider-label{font-family:var(--mono);font-size:0.56rem;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;color:var(--text2);white-space:nowrap;display:flex;align-items:center;gap:6px;}
 .sc-divider-label::before{content:'❯';color:var(--accent);font-size:0.68rem;}
 .sc-divider-line{flex:1;height:1px;background:linear-gradient(90deg,var(--border2),transparent);}
+
+/* ════════ MATCH-CARD TEAM SELECTIONS (ins/outs) ════════ */
+/* Sits inside each match card, between the matchup header and the
+   prediction. Two columns (HOME · AWAY), each with stacked IN / OUT
+   sub-sections. Each player row = name + thin gradient progress bar
+   showing their team-relative AFL Fantasy price percentile. */
+
+.mc-sel{
+  margin:0;
+  padding:14px 14px 12px;
+  border-top:1px solid var(--border);
+  background:linear-gradient(180deg,rgba(255,255,255,0.012),transparent 70%);
+  font-family:var(--mono);
+  position:relative;
+}
+.mc-sel-head{
+  display:flex; align-items:center; gap:6px;
+  padding:0 0 10px;
+  font-size:0.5rem; font-weight:800;
+  letter-spacing:0.14em; text-transform:uppercase;
+  color:var(--text2);
+}
+.mc-sel-head-glyph{font-size:0.62rem;color:var(--accent3);filter:drop-shadow(0 0 4px rgba(34,211,238,0.4));}
+.mc-sel-head-lbl{}
+
+.mc-sel-cols{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+}
+.mc-sel-side{
+  display:flex; flex-direction:column; gap:8px;
+  min-width:0;
+}
+.mc-sel-side-head{
+  display:flex; align-items:center; gap:6px;
+  padding:5px 0 7px 8px;
+  border-left:2px solid;
+  position:relative;
+}
+.mc-sel-side-bar{display:none;}  /* the border-left already serves as the team accent */
+.mc-sel-side-name{
+  font-size:0.6rem; font-weight:800;
+  letter-spacing:0.12em;
+  color:var(--white);
+}
+
+.mc-sel-section{
+  display:flex; flex-direction:column; gap:4px;
+}
+.mc-sel-section-head{
+  display:flex; align-items:center; gap:5px;
+  padding:0 0 2px;
+  font-size:0.46rem; font-weight:800;
+  letter-spacing:0.16em; text-transform:uppercase;
+}
+.mc-sel-ins   .mc-sel-section-head{color:var(--green);}
+.mc-sel-outs  .mc-sel-section-head{color:var(--red);}
+.mc-sel-section-glyph{font-size:0.6rem;line-height:1;filter:drop-shadow(0 0 4px currentColor);}
+.mc-sel-section-lbl{}
+.mc-sel-section-n{
+  margin-left:auto;
+  font-size:0.42rem; color:var(--text3); letter-spacing:0.1em;
+  font-weight:700; padding:1px 5px;
+  border:1px solid var(--border2); border-radius:2px;
+  background:rgba(255,255,255,0.02);
+}
+
+.mc-sel-rows{display:flex;flex-direction:column;gap:5px;}
+
+.mc-sel-row{
+  display:grid;
+  grid-template-columns:1fr 60px;
+  gap:8px;
+  align-items:center;
+  padding:1px 0;
+}
+.mc-sel-name{
+  font-size:0.56rem; font-weight:700;
+  color:var(--white); letter-spacing:0.02em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  min-width:0;
+}
+.mc-sel-row-unknown .mc-sel-name{color:var(--text2);}
+.mc-sel-bar{}
+.mc-sel-bar-track{
+  position:relative;
+  height:5px;
+  background:rgba(255,255,255,0.04);
+  border-radius:3px;
+  overflow:hidden;
+  border:1px solid rgba(255,255,255,0.025);
+}
+.mc-sel-bar-fill{
+  position:absolute; top:0; bottom:0; left:0;
+  border-radius:3px;
+  transition:width 0.6s cubic-bezier(0.22,0.61,0.36,1);
+  box-shadow:0 0 6px rgba(255,255,255,0.04);
+  width:0;  /* animated to target via animation */
+  animation:mc-sel-bar-grow 0.7s cubic-bezier(0.22,0.61,0.36,1) forwards;
+}
+.mc-sel-bar-fill-unknown{
+  background:repeating-linear-gradient(45deg,rgba(255,255,255,0.05) 0,rgba(255,255,255,0.05) 3px,rgba(255,255,255,0.02) 3px,rgba(255,255,255,0.02) 6px) !important;
+  box-shadow:none;
+}
+@keyframes mc-sel-bar-grow{
+  from{transform:scaleX(0);transform-origin:left;}
+  to  {transform:scaleX(1);transform-origin:left;}
+}
+.mc-sel-empty{
+  font-size:0.5rem; color:var(--text3);
+  letter-spacing:0.1em; text-transform:uppercase;
+  font-style:italic; padding:6px 0 4px;
+}
+
+/* Per-card disclaimer when teams haven't been named yet */
+.mc-sel-pending{
+  margin:0;
+  padding:11px 14px;
+  border-top:1px solid var(--border);
+  background:linear-gradient(180deg,rgba(251,191,36,0.05),rgba(251,191,36,0.01));
+  display:flex; align-items:center; gap:10px;
+  font-family:var(--mono);
+  position:relative;
+}
+.mc-sel-pending::before{
+  content:''; position:absolute;
+  top:0; left:0; right:0; height:1px;
+  background:linear-gradient(90deg,rgba(251,191,36,0.3),transparent 60%);
+}
+.mc-sel-pending-glyph{
+  font-size:0.58rem; font-weight:800; color:var(--amber);
+  letter-spacing:0.02em; padding:2px 5px;
+  border:1px solid rgba(251,191,36,0.35);
+  border-radius:2px;
+  background:rgba(251,191,36,0.06);
+  flex-shrink:0;
+  animation:glyph-breathe 2.8s ease-in-out infinite;
+}
+.mc-sel-pending-body{
+  display:flex; flex-direction:column; gap:2px;
+  min-width:0;
+}
+.mc-sel-pending-k{
+  font-size:0.5rem; color:var(--amber);
+  letter-spacing:0.14em; text-transform:uppercase;
+  font-weight:800;
+}
+.mc-sel-pending-v{
+  font-size:0.54rem; color:var(--text2);
+  letter-spacing:0.01em; line-height:1.4;
+}
+
+/* Mobile — collapse selections to single column on narrow screens */
+@media (max-width:520px){
+  .mc-sel{padding:12px 12px 10px;}
+  .mc-sel-cols{grid-template-columns:1fr;gap:14px;}
+  .mc-sel-side-head{padding:4px 0 6px 7px;}
+  .mc-sel-pending{padding:10px 12px;gap:8px;}
+}
 
 /* ════════ ROUND EDGE PANEL ════════ */
 .edge-wrap{margin:20px 14px 0;font-family:var(--mono);animation:fadeUp 0.45s ease 0.05s both;}
@@ -5534,24 +6137,6 @@ def main():
         """), unsafe_allow_html=True)
 
         if games and tips:
-            named_status, earliest_game = teams_named_status(games)
-            if named_status == "pending" and earliest_game is not None:
-                days_back = (earliest_game.weekday() - 3) % 7
-                if days_back == 0 and earliest_game.weekday() != 3:
-                    days_back = 7
-                thu = earliest_game - timedelta(days=days_back)
-                thu_aedt = thu.astimezone(ZoneInfo("Australia/Melbourne")).replace(hour=18, minute=30, second=0, microsecond=0)
-                thu_label = thu_aedt.strftime("%a %d %b · %H:%M AEDT").upper().replace(" 0", " ")
-                st.markdown(_h(f"""
-                <div class="named-banner">
-                  <span class="named-banner-glyph">[ ! ]</span>
-                  <span class="named-banner-body">
-                    <span class="named-banner-k">TEAMS NOT YET NAMED</span>
-                    <span class="named-banner-v">Lists drop {thu_label} · predictions assume full-strength squads</span>
-                  </span>
-                </div>
-                """), unsafe_allow_html=True)
-
             st.markdown('<div class="cmd-head"><div class="cmd-label">Round Briefing · Our Predictions</div></div>', unsafe_allow_html=True)
             render_tips(games, tips, sources, top_models, weights, rnd, standings_lookup, all_season_games)
         else:

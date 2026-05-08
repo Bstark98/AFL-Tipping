@@ -47,6 +47,36 @@ TEAM_COLOURS = {
     "Western Bulldogs": ("#FFFFFF", "#014896"),
 }
 
+# ── TEAM_ACCENT_LEGIBLE ──
+# Each team's "speakable" accent colour for rendering as text/glyphs on a
+# near-black UI surface (#06060a). The rule: must read at a glance, must
+# feel distinctively that team's. For teams with a dark primary (Carlton
+# navy, Collingwood black, Essendon black, GWS charcoal), we lift to a
+# brighter brand-adjacent shade so the abbreviation actually shows up.
+# For teams with a punchy primary (Brisbane crimson, Sydney red, Bulldogs
+# blue), the primary itself is fine. Tuned by hand for contrast and
+# distinctiveness — no two teams should read as the same colour.
+TEAM_ACCENT_LEGIBLE = {
+    "Adelaide":         "#FFD200",  # gold (their text colour, pops on dark)
+    "Brisbane Lions":   "#E5184D",  # brightened crimson
+    "Carlton":          "#5A8FBA",  # lifted navy (Carlton's digital accent)
+    "Collingwood":      "#E8E8E8",  # near-white (their primary is black, so white reads)
+    "Essendon":         "#E8344A",  # Essendon red (lifted from #CC2031)
+    "Fremantle":        "#9D7BFF",  # purple (lifted from their dark plum)
+    "Geelong":          "#5DA0E5",  # bay blue (lifted from #1C3C63)
+    "Gold Coast":       "#FFD92A",  # gold (their text colour)
+    "GWS Giants":       "#F15C22",  # GWS orange
+    "Hawthorn":         "#FBBF15",  # gold (their text colour)
+    "Melbourne":        "#FF3D5A",  # demons red (lifted)
+    "North Melbourne":  "#3D7CE5",  # roo blue (lifted from #013B9F)
+    "Port Adelaide":    "#1AC3E5",  # teal (lifted from #008AAB)
+    "Richmond":         "#FED102",  # tigers gold
+    "St Kilda":         "#FF3322",  # saints red (lifted)
+    "Sydney":           "#FF3D44",  # swans red (lifted)
+    "West Coast":       "#F2A900",  # eagles gold
+    "Western Bulldogs": "#3D7CE5",  # bulldogs blue (lifted from #014896)
+}
+
 TEAM_LOGOS = {
     "Adelaide": "https://a.espncdn.com/i/teamlogos/afl/500/adel.png",
     "Brisbane Lions": "https://a.espncdn.com/i/teamlogos/afl/500/bl.png",
@@ -100,6 +130,15 @@ def team_primary_bg(name):
 
 def team_primary_fg(name):
     return TEAM_COLOURS.get(canonical(name), ("#fff", "#1d1d1f"))[0]
+
+def team_accent(name):
+    """Returns the team's legible-on-dark accent colour for rendering as
+    text or glyphs on the app's near-black UI. Curated per-team in the
+    TEAM_ACCENT_LEGIBLE map above — for teams with very dark primaries
+    (Carlton navy, Collingwood black) we lift to a brand-adjacent
+    brighter shade so the abbreviation actually reads. Falls back to
+    white for unknown teams."""
+    return TEAM_ACCENT_LEGIBLE.get(canonical(name), "#FFFFFF")
 
 def rgba_from_hex(hex_code, alpha=1.0):
     hex_code = hex_code.strip().lstrip("#")
@@ -183,64 +222,91 @@ def ladder_mini(team_name, standings_lookup):
 # Footywire team-slug → Squiggle/app-canonical team name
 FW_TEAM_SLUG_TO_NAME = {
     "adelaide-crows":           "Adelaide",
+    "adelaide":                 "Adelaide",
     "brisbane-lions":           "Brisbane Lions",
+    "brisbane":                 "Brisbane Lions",
     "carlton-blues":            "Carlton",
+    "carlton":                  "Carlton",
     "collingwood-magpies":      "Collingwood",
+    "collingwood":              "Collingwood",
     "essendon-bombers":         "Essendon",
+    "essendon":                 "Essendon",
     "fremantle-dockers":        "Fremantle",
+    "fremantle":                "Fremantle",
     "geelong-cats":             "Geelong",
+    "geelong":                  "Geelong",
     "gold-coast-suns":          "Gold Coast",
+    "gold-coast":               "Gold Coast",
     "greater-western-sydney-giants": "GWS Giants",
+    "greater-western-sydney":   "GWS Giants",
     "gws-giants":               "GWS Giants",
+    "gws":                      "GWS Giants",
     "hawthorn-hawks":           "Hawthorn",
+    "hawthorn":                 "Hawthorn",
     "melbourne-demons":         "Melbourne",
+    "melbourne":                "Melbourne",
     "north-melbourne-kangaroos":"North Melbourne",
+    "north-melbourne":          "North Melbourne",
+    "kangaroos":                "North Melbourne",
     "port-adelaide-power":      "Port Adelaide",
+    "port-adelaide":            "Port Adelaide",
     "richmond-tigers":          "Richmond",
+    "richmond":                 "Richmond",
     "st-kilda-saints":          "St Kilda",
+    "st-kilda":                 "St Kilda",
     "sydney-swans":             "Sydney",
+    "sydney":                   "Sydney",
     "west-coast-eagles":        "West Coast",
+    "west-coast":               "West Coast",
     "western-bulldogs":         "Western Bulldogs",
+    "bulldogs":                 "Western Bulldogs",
 }
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_team_selections():
-    """Returns a dict keyed by frozenset({home, away}) → {
-        'home_name': str, 'away_name': str,
-        'home': {'ins': [{'name', 'fill'}], 'outs': [...]},
-        'away': {...},
-    }
-    Returns {} if the scrape fails for any reason. Fully resilient — never
-    raises into the Streamlit run loop."""
+    """Returns (data, status) where:
+      - data is a dict keyed by frozenset({home, away}) → {home_name, away_name, home, away}
+      - status is one of: 'ok', 'missing-deps', 'scrape-failed', 'empty', 'unmapped-teams'
+
+    The status flag drives the on-card messaging — we differentiate
+    'teams not yet named' (legitimate) from 'the scraper broke' (actionable),
+    so when the data is missing we can tell the user *why*. Fully resilient —
+    never raises into the Streamlit run loop."""
     try:
-        import requests as _req
+        import requests as _req  # noqa: F401
         from bs4 import BeautifulSoup as _BS  # noqa: F401
     except ImportError:
-        return {}
+        return ({}, "missing-deps")
 
-    # Local imports of the parsing internals — these live in this same file
-    # below the helper functions, but we wrap the whole pipeline in try/except
-    # so any unexpected scraper change just falls back to "no data" rather
-    # than crashing the app.
     try:
         sel_html = _fw_fetch("https://www.footywire.com/afl/footy/afl_team_selections")
         rank_html = _fw_fetch("https://www.footywire.com/afl/footy/dream_team_season")
         if not sel_html or not rank_html:
-            return {}
+            return ({}, "scrape-failed")
         rankings = _fw_parse_rankings(rank_html)
         _fw_compute_team_pcts(rankings)
         matches = _fw_parse_selections(sel_html)
         _fw_enrich(matches, rankings)
     except Exception:
-        return {}
+        return ({}, "scrape-failed")
 
-    # Reshape into the lookup format the renderer expects
+    if not matches:
+        # No matches parsed — selections page might be empty between rounds
+        return ({}, "empty")
+
     out = {}
+    unmapped_slugs = set()
     for m in matches:
         if not m.get("home") or not m.get("away"):
             continue
-        h_name = FW_TEAM_SLUG_TO_NAME.get(m["home"]["team_slug"])
-        a_name = FW_TEAM_SLUG_TO_NAME.get(m["away"]["team_slug"])
+        h_slug = m["home"]["team_slug"]
+        a_slug = m["away"]["team_slug"]
+        h_name = FW_TEAM_SLUG_TO_NAME.get(h_slug)
+        a_name = FW_TEAM_SLUG_TO_NAME.get(a_slug)
+        if not h_name:
+            unmapped_slugs.add(h_slug)
+        if not a_name:
+            unmapped_slugs.add(a_slug)
         if not h_name or not a_name:
             continue
 
@@ -259,7 +325,12 @@ def fetch_team_selections():
             "home": _shape(m["home"]),
             "away": _shape(m["away"]),
         }
-    return out
+
+    if not out and unmapped_slugs:
+        # Got matches but couldn't map any of their team slugs — slug map needs updating
+        return ({"_unmapped": list(unmapped_slugs)}, "unmapped-teams")
+
+    return (out, "ok" if out else "empty")
 
 def _fw_fetch(url):
     """Light wrapper around requests.get — returns text or None."""
@@ -476,7 +547,8 @@ def _fw_enrich(matches, rankings):
 
 def get_selections_for_game(home_name, away_name, selections_data):
     """Look up a single match's ins/outs by team names. Returns None if no
-    Footywire data exists for this game (i.e. teams not yet named)."""
+    Footywire data exists for this game (i.e. teams not yet named, or the
+    matchup wasn't on the selections page)."""
     if not selections_data:
         return None
     key = frozenset({canonical(home_name), canonical(away_name)})
@@ -1947,117 +2019,501 @@ def sparkline_svg(values, width=180, height=22, stroke="#4f8fff"):
 # ════════════════════════════════════════════════════════════════════════════
 def render_team_selections_block(home, away, selections_data,
                                  home_bg, away_bg):
-    """Renders the ins/outs panel that sits between the team header and the
-    'Our Prediction' block on each match card.
+    """Renders the ins/outs panel as a collapsible disclosure.
 
-    Layout: two columns (HOME · AWAY), each with two stacked sub-sections —
-    INS (green-tinted) and OUTS (red-tinted). Each player gets a row with
-    their name on the left and a thin gradient progress bar on the right;
-    bar fill = the player's team-relative AFL Fantasy price percentile
-    (1.0 = most expensive, 0.0 = cheapest), so a high-fill bar in OUTS means
-    a key player has been dropped, and high-fill in INS means a key player
-    has returned.
+    The expanded view is a Bloomberg-tier layout with three premium touches:
 
-    Returns the disclaimer banner instead when no Footywire data exists for
-    this matchup yet (e.g. teams haven't been named for the round)."""
+      1. A 'tug-of-war' headline strip at the top showing both teams'
+         net XI-strength delta side-by-side, with a connecting tension
+         bar between them — instantly readable: who upgraded more?
+      2. Each bar reflects the player's TEAM-RELATIVE price percentile
+         on its own scale: a 45% bar means the player sits at the 45th
+         percentile of their own team's salary list — a direct proxy
+         for how important they are to their squad. No cross-team
+         normalisation; each bar is honest about its own team.
+      3. The single highest-fill OUT row per team gets a small leading
+         sigil (◆) — your eye lands on the headline change first, then
+         scans the rest of the list.
+
+    Bars stagger-animate in (60ms apart per row), and percentile values
+    sit beside each bar in muted micro-mono — readable, not loud."""
+
+    def _summary_team_pill(team, ins_n, outs_n, has_unknown, accent_color):
+        """A single token pill per team for the collapsed summary."""
+        abbr = team_abbr(team)
+        in_chunk  = (f'<span class="mc-sel-pill-in">{ins_n}</span>'
+                     if ins_n else '<span class="mc-sel-pill-zero">0</span>')
+        out_chunk = (f'<span class="mc-sel-pill-out">{outs_n}</span>'
+                     if outs_n else '<span class="mc-sel-pill-zero">0</span>')
+        unk_html = ' <span class="mc-sel-pill-unk" title="Some changes have no impact data">?</span>' if has_unknown else ''
+        return (f'<span class="mc-sel-team-pill" style="--team-accent:{accent_color};">'
+                f'<span class="mc-sel-pill-abbr">{abbr}</span>'
+                f'<span class="mc-sel-pill-divider"></span>'
+                f'<span class="mc-sel-pill-counts">'
+                f'  {in_chunk}'
+                f'  <span class="mc-sel-pill-sep">·</span>'
+                f'  {out_chunk}'
+                f'</span>'
+                f'{unk_html}'
+                f'</span>')
 
     record = get_selections_for_game(home, away, selections_data)
+
     if record is None:
-        # Per-card "teams not yet named" disclaimer — replaces the round-wide
-        # banner that used to sit at the top of the tab.
+        # ── No data path ── teams not named yet for this game ──
         return _h(f"""
-        <div class="mc-sel-pending">
-          <div class="mc-sel-pending-glyph">[ ! ]</div>
-          <div class="mc-sel-pending-body">
-            <div class="mc-sel-pending-k">TEAM LISTS NOT YET NAMED</div>
-            <div class="mc-sel-pending-v">Prediction assumes both squads at full strength · ins/outs unknown</div>
+        <details class="mc-sel-disclosure mc-sel-disclosure-pending">
+          <summary class="mc-sel-summary">
+            <span class="mc-sel-sum-icon mc-sel-sum-icon-pending">!</span>
+            <span class="mc-sel-sum-label">
+              <span class="mc-sel-sum-title">Team Lists</span>
+              <span class="mc-sel-sum-status mc-sel-sum-status-pending">Not yet named</span>
+            </span>
+            <span class="mc-sel-sum-spacer"></span>
+            <span class="mc-sel-cta">
+              <span class="mc-sel-cta-text">Details</span>
+              <span class="mc-sel-cta-chevron">▾</span>
+            </span>
+          </summary>
+          <div class="mc-sel-pending-body-wrap">
+            <div class="mc-sel-pending">
+              <div class="mc-sel-pending-glyph">[ ! ]</div>
+              <div class="mc-sel-pending-body">
+                <div class="mc-sel-pending-k">TEAM LISTS NOT YET NAMED</div>
+                <div class="mc-sel-pending-v">
+                  Footywire publishes team lists from late Thursday onwards.
+                  Until then, our prediction assumes both squads at full strength —
+                  ins, outs, and injury news are unknown for this match.
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        </details>
         """)
 
-    def _row_html(player, bg_color, accent_color, kind):
-        """Single player row — name on the left, progress bar on the right."""
-        fill = player.get("fill")
+    # ── Data path ──
+
+    home_side = record["home"]; away_side = record["away"]
+    home_ins  = home_side.get("ins")  or []
+    home_outs = home_side.get("outs") or []
+    away_ins  = away_side.get("ins")  or []
+    away_outs = away_side.get("outs") or []
+
+    # Sort each list by impact% descending so the most consequential change
+    # leads the column. None-valued (unranked) players sink to the bottom.
+    # A punter scanning the column gets the biggest blow / biggest return at
+    # the top — instant visual hierarchy without any extra UI.
+    def _sort_by_impact(players):
+        return sorted(players,
+                      key=lambda p: (-(p.get("fill") if p.get("fill") is not None else -1)))
+    home_ins  = _sort_by_impact(home_ins)
+    home_outs = _sort_by_impact(home_outs)
+    away_ins  = _sort_by_impact(away_ins)
+    away_outs = _sort_by_impact(away_outs)
+
+    # After sorting, the headline (top-of-list) is always index 0 —
+    # provided there are 2+ entries and the top one has real impact.
+    def _has_headline(players):
+        if len(players) < 2:
+            return False
+        top = players[0].get("fill")
+        return top is not None and top > 0
+    home_in_has_headline  = _has_headline(home_ins)
+    home_out_has_headline = _has_headline(home_outs)
+    away_in_has_headline  = _has_headline(away_ins)
+    away_out_has_headline = _has_headline(away_outs)
+
+    def _impact_tag(fill, kind):
+        """Returns a small inline tag chip for the headline row, classifying
+        the impact magnitude. Reads like a Bloomberg news flag."""
         if fill is None:
-            # Player wasn't in the rankings table (rookie or hasn't played in
-            # 2026 yet) — show a muted placeholder bar and a dash for the name
-            # area to keep alignment.
-            bar_inner = ('<div class="mc-sel-bar-fill mc-sel-bar-fill-unknown" '
-                         'style="width:8%;"></div>')
-            extra_class = " mc-sel-row-unknown"
-        else:
-            pct = max(0.0, min(1.0, fill)) * 100
-            # Gradient direction reads naturally for both — INS uses green→team
-            # accent (positive arrival), OUTS uses team accent→red (loss).
-            if kind == "in":
-                grad = (f"linear-gradient(90deg, rgba(52,211,153,0.6), "
-                        f"{accent_color})")
-            else:
-                grad = (f"linear-gradient(90deg, {accent_color}, "
-                        f"rgba(248,113,113,0.7))")
-            bar_inner = (f'<div class="mc-sel-bar-fill" '
-                         f'style="width:{pct:.0f}%;background:{grad};"></div>')
-            extra_class = ""
+            return ""
+        pct = fill * 100
+        if kind == "out":
+            if pct >= 80:
+                return '<span class="mc-sel-tag mc-sel-tag-blow">Big Loss</span>'
+            if pct >= 60:
+                return '<span class="mc-sel-tag mc-sel-tag-notable">Notable Out</span>'
+            return ""
+        else:  # in
+            if pct >= 80:
+                return '<span class="mc-sel-tag mc-sel-tag-key">Key Return</span>'
+            if pct >= 60:
+                return '<span class="mc-sel-tag mc-sel-tag-boost">Boost</span>'
+            return ""
 
+    def _row_html(player, accent_color, kind, row_index, is_headline):
+        fill = player.get("fill")
         name = player.get("name") or "—"
-        return (f'<div class="mc-sel-row{extra_class}">'
-                f'<div class="mc-sel-name">{name}</div>'
-                f'<div class="mc-sel-bar"><div class="mc-sel-bar-track">{bar_inner}</div></div>'
-                f'</div>')
+        sigil = '<span class="mc-sel-row-sigil" aria-hidden="true">◆</span>' if is_headline else ''
+        row_classes = ["mc-sel-row"]
+        if is_headline:
+            row_classes.append("mc-sel-row-headline")
+            row_classes.append(f"mc-sel-row-headline-{kind}")
 
-    def _side_html(team_name, side_data, bg_color):
-        ins  = side_data.get("ins")  or []
-        outs = side_data.get("outs") or []
-
-        ins_rows  = "".join(_row_html(p, bg_color, bg_color, "in")  for p in ins)
-        outs_rows = "".join(_row_html(p, bg_color, bg_color, "out") for p in outs)
-
-        ins_block  = (f'<div class="mc-sel-section mc-sel-ins">'
-                      f'<div class="mc-sel-section-head">'
-                      f'<span class="mc-sel-section-glyph">▲</span>'
-                      f'<span class="mc-sel-section-lbl">IN</span>'
-                      f'<span class="mc-sel-section-n">{len(ins)}</span>'
-                      f'</div>'
-                      f'<div class="mc-sel-rows">{ins_rows}</div>'
-                      f'</div>') if ins else ""
-
-        outs_block = (f'<div class="mc-sel-section mc-sel-outs">'
-                      f'<div class="mc-sel-section-head">'
-                      f'<span class="mc-sel-section-glyph">▼</span>'
-                      f'<span class="mc-sel-section-lbl">OUT</span>'
-                      f'<span class="mc-sel-section-n">{len(outs)}</span>'
-                      f'</div>'
-                      f'<div class="mc-sel-rows">{outs_rows}</div>'
-                      f'</div>') if outs else ""
-
-        if not ins_block and not outs_block:
-            inner = '<div class="mc-sel-empty">no changes</div>'
+        if fill is None:
+            bar_inner = '<div class="mc-sel-bar-nub"></div>'
+            pct_label = ''
+            row_classes.append("mc-sel-row-unknown")
+            tag_html = ''
         else:
-            inner = ins_block + outs_block
+            # Bar fill = the player's team-relative price percentile, rendered
+            # 1:1 against the track. A bar reaching 45% of the track means the
+            # player sits at the 45th percentile of their own team's salary
+            # list (i.e. cheaper than 55% of teammates, more expensive than
+            # 45%). This IS the proxy for team importance — a 90% bar in OUTS
+            # means a key player has been dropped; a 10% bar means a fringe
+            # player. No cross-game scaling — each bar reads honestly on its
+            # own team's terms.
+            pct = max(0.0, min(1.0, fill)) * 100
+            if kind == "in":
+                grad = (f"linear-gradient(90deg,"
+                        f"  {_rgba_with_alpha(accent_color, 0.3)} 0%,"
+                        f"  {_rgba_with_alpha(accent_color, 0.85)} 70%,"
+                        f"  rgba(52,211,153,0.95) 100%)")
+                glow = "rgba(52,211,153,0.28)"
+            else:
+                grad = (f"linear-gradient(90deg,"
+                        f"  {_rgba_with_alpha(accent_color, 0.3)} 0%,"
+                        f"  {_rgba_with_alpha(accent_color, 0.85)} 70%,"
+                        f"  rgba(248,113,113,0.95) 100%)")
+                glow = "rgba(248,113,113,0.28)"
+            bar_inner = (f'<div class="mc-sel-bar-fill" '
+                         f'style="width:{pct:.1f}%;background:{grad};box-shadow:0 0 6px {glow};"></div>')
+            pct_label = f'<span class="mc-sel-bar-pct">{pct:.0f}<span class="mc-sel-bar-pct-unit">%</span></span>'
+            # Inline impact tag — only on headline rows, only when the
+            # impact% crosses the threshold for a flag (≥60%).
+            tag_html = _impact_tag(fill, kind) if is_headline else ''
 
-        return (f'<div class="mc-sel-side">'
-                f'<div class="mc-sel-side-head" style="border-color:{bg_color};">'
-                f'<span class="mc-sel-side-bar" style="background:{bg_color};"></span>'
-                f'<span class="mc-sel-side-name">{team_name.upper()}</span>'
+        cls = " ".join(row_classes)
+        return (f'<div class="{cls}" style="--row-i:{row_index};">'
+                f'<div class="mc-sel-name">'
+                f'{sigil}'
+                f'<span class="mc-sel-name-text">{name}</span>'
+                f'{tag_html}'
                 f'</div>'
-                f'{inner}'
+                f'<div class="mc-sel-bar-wrap">'
+                f'<div class="mc-sel-bar-track">{bar_inner}</div>'
+                f'{pct_label}'
+                f'</div>'
                 f'</div>')
 
-    home_html = _side_html(home, record["home"], home_bg)
-    away_html = _side_html(away, record["away"], away_bg)
+    def _section_html(label, glyph, players, kind, accent_color, has_headline, row_offset):
+        if not players:
+            return ""
+        rows_html = ""
+        for i, p in enumerate(players):
+            # After sorting, the headline row is always index 0
+            rows_html += _row_html(p, accent_color, kind, row_offset + i,
+                                   has_headline and i == 0)
+        return (f'<div class="mc-sel-section mc-sel-{kind}s">'
+                f'<div class="mc-sel-section-head">'
+                f'<div class="mc-sel-section-head-l">'
+                f'<span class="mc-sel-section-glyph">{glyph}</span>'
+                f'<span class="mc-sel-section-lbl">{label}</span>'
+                f'<span class="mc-sel-section-n">{len(players)}</span>'
+                f'</div>'
+                f'<div class="mc-sel-section-head-r">'
+                f'<span class="mc-sel-section-axis">Impact %</span>'
+                f'</div>'
+                f'</div>'
+                f'<div class="mc-sel-rows">{rows_html}</div>'
+                f'</div>')
+
+    def _net_delta(side):
+        """Returns (delta_pts, label, color, abs_pts, status) for the side's
+        net XI delta. Status is one of:
+          'full'   — both ins and outs have impact data, full reading
+          'partial'— only one side has data; we render a directional reading
+                     ('losses only' or 'gains only')
+          'empty'  — no impact data on either side; show '—' explicitly"""
+        ins_pcts  = [p["fill"] for p in (side.get("ins") or [])
+                     if p.get("fill") is not None]
+        outs_pcts = [p["fill"] for p in (side.get("outs") or [])
+                     if p.get("fill") is not None]
+
+        if not ins_pcts and not outs_pcts:
+            return (0.0, "Data pending", "var(--text3)", 0.0, "empty")
+
+        if ins_pcts and outs_pcts:
+            ia = sum(ins_pcts)/len(ins_pcts)
+            oa = sum(outs_pcts)/len(outs_pcts)
+            delta = (ia - oa) * 100
+            if delta > 10:
+                return (delta, "Stronger", "var(--green)", abs(delta), "full")
+            if delta < -10:
+                return (delta, "Weaker", "var(--red)", abs(delta), "full")
+            return (delta, "Roughly even", "var(--text2)", abs(delta), "full")
+
+        # Partial — one-sided reading. Show direction without claiming a
+        # full delta. E.g. an OUTS-only side reads as a loss of average X%;
+        # an INS-only side reads as a gain of average X%. We still show
+        # the magnitude so the tug-of-war can render a proportional bar.
+        if outs_pcts and not ins_pcts:
+            mag = (sum(outs_pcts) / len(outs_pcts)) * 100
+            return (-mag, "Losses only", "var(--red)", mag, "partial")
+        # ins_pcts and not outs_pcts
+        mag = (sum(ins_pcts) / len(ins_pcts)) * 100
+        return (mag, "Gains only", "var(--green)", mag, "partial")
+
+    def _side_html(ins_list, outs_list, bg_color, in_has_h, out_has_h, row_offset,
+                   own_total, other_total):
+        ins_html  = _section_html("In",  "▲", ins_list,  "in",  bg_color, in_has_h,  row_offset)
+        outs_html = _section_html("Out", "▼", outs_list, "out", bg_color, out_has_h, row_offset + len(ins_list))
+        if not ins_html and not outs_html:
+            inner = '<div class="mc-sel-empty">No changes · unchanged from last week</div>'
+        else:
+            inner = ins_html + outs_html
+        # If this side has notably fewer changes than the other, append a
+        # small grey footer note so the empty space below reads as
+        # 'they made fewer changes' rather than 'data missing'.
+        footer = ""
+        if own_total > 0 and other_total > own_total + 1:
+            footer = ('<div class="mc-sel-side-footer">'
+                      'All other players unchanged from last week'
+                      '</div>')
+        return (f'<div class="mc-sel-side">'
+                f'<div class="mc-sel-side-body">{inner}{footer}</div>'
+                f'</div>')
+
+    home_total = len(home_ins) + len(home_outs)
+    away_total = len(away_ins) + len(away_outs)
+    home_html = _side_html(home_ins, home_outs, home_bg,
+                           home_in_has_headline, home_out_has_headline, 0,
+                           home_total, away_total)
+    away_html = _side_html(away_ins, away_outs, away_bg,
+                           away_in_has_headline, away_out_has_headline,
+                           len(home_ins) + len(home_outs),
+                           away_total, home_total)
+
+    # ── Headline tug-of-war strip ───────────────────────────────────────
+    h_delta, h_lbl, h_color, h_abs, h_status = _net_delta(home_side)
+    a_delta, a_lbl, a_color, a_abs, a_status = _net_delta(away_side)
+    home_chip = team_chip(home, size="md")
+    away_chip = team_chip(away, size="md")
+
+    # Tug-of-war scale — divide the centre track in proportion to which
+    # side has the bigger absolute delta. Special-cases:
+    #   - both empty  → centred 50/50, both halves dimmed
+    #   - one empty   → centred 50/50, the empty side dims out (renders
+    #                   with no fill instead of being squashed to nothing)
+    #   - both have data → proportional split as normal
+    if h_status == "empty" and a_status == "empty":
+        h_share = a_share = 0.5
+        h_dim = a_dim = True
+    elif h_status == "empty":
+        h_share = a_share = 0.5
+        h_dim = True;  a_dim = False
+    elif a_status == "empty":
+        h_share = a_share = 0.5
+        h_dim = False; a_dim = True
+    else:
+        total_abs = h_abs + a_abs
+        if total_abs <= 0:
+            h_share = a_share = 0.5
+        else:
+            h_share = h_abs / total_abs
+            a_share = a_abs / total_abs
+        h_dim = a_dim = False
+
+    def _delta_chip(delta, lbl, color, status):
+        """Inline delta value chip — shows ±N pts and label, colour-coded.
+
+        Renders differently per status:
+          'full'    — ±delta with sign (+24, -12)
+          'partial' — magnitude only with prefix glyph (▼12, ▲34) since the
+                      number isn't a 'net' figure but a one-sided average
+          'empty'   — em-dash placeholder, neutral colour"""
+        if status == "empty":
+            num_html = '<span class="mc-sel-delta-num mc-sel-delta-num-neutral">—</span>'
+        elif status == "partial":
+            # Show direction with a chevron prefix instead of a sign
+            arrow = "▼" if delta < 0 else "▲"
+            num_html = (f'<span class="mc-sel-delta-num mc-sel-delta-num-partial" style="color:{color};">'
+                        f'<span class="mc-sel-delta-arrow">{arrow}</span>{abs(delta):.0f}'
+                        f'</span>')
+        elif delta == 0:
+            num_html = '<span class="mc-sel-delta-num mc-sel-delta-num-neutral">±0</span>'
+        elif delta > 0:
+            num_html = f'<span class="mc-sel-delta-num" style="color:{color};">+{delta:.0f}</span>'
+        else:
+            num_html = f'<span class="mc-sel-delta-num" style="color:{color};">{delta:.0f}</span>'
+        return (f'<span class="mc-sel-delta-chip">'
+                f'{num_html}'
+                f'<span class="mc-sel-delta-lbl" style="color:{color};">{lbl}</span>'
+                f'</span>')
+
+    headline_html = (f'<div class="mc-sel-headline">'
+                     f'<div class="mc-sel-headline-side mc-sel-headline-home">'
+                     f'  <div class="mc-sel-headline-team">{home_chip}</div>'
+                     f'  {_delta_chip(h_delta, h_lbl, h_color, h_status)}'
+                     f'</div>'
+                     f'<div class="mc-sel-headline-tug">'
+                     f'  <div class="mc-sel-headline-bar">'
+                     f'    <div class="mc-sel-headline-bar-h{" mc-sel-headline-bar-dim" if h_dim else ""}" style="flex:{h_share:.4f};background:linear-gradient(90deg,{_rgba_with_alpha(home_bg, 0.5)},{_rgba_with_alpha(home_bg, 0.85)});"></div>'
+                     f'    <div class="mc-sel-headline-bar-knot"></div>'
+                     f'    <div class="mc-sel-headline-bar-a{" mc-sel-headline-bar-dim" if a_dim else ""}" style="flex:{a_share:.4f};background:linear-gradient(90deg,{_rgba_with_alpha(away_bg, 0.85)},{_rgba_with_alpha(away_bg, 0.5)});"></div>'
+                     f'  </div>'
+                     f'  <div class="mc-sel-headline-axis">'
+                     f'    <span>NET XI DELTA</span>'
+                     f'  </div>'
+                     f'</div>'
+                     f'<div class="mc-sel-headline-side mc-sel-headline-away">'
+                     f'  {_delta_chip(a_delta, a_lbl, a_color, a_status)}'
+                     f'  <div class="mc-sel-headline-team">{away_chip}</div>'
+                     f'</div>'
+                     f'</div>')
+
+    # ── Verdict line ────────────────────────────────────────────────────
+    # Auto-composed natural-language sentence summarising the changes.
+    # This is the one paragraph a punter actually reads. Surfaces the
+    # headline IN/OUT for each team in plain English so a glance gives
+    # them a story they can use, not just numbers.
+    def _verdict_clause(team_abbr_str, ins_list, outs_list):
+        """Returns a structured tuple (kind, html) for the team's verdict.
+          kind ∈ {'headline', 'minor', 'pending', 'none'}
+          html is the rendered HTML clause (or None if 'none').
+
+        Caller uses kind to merge multiple 'minor' clauses into a single
+        sentence, avoiding 'TEAM_A make minor changes only · TEAM_B make
+        minor changes only' redundancy."""
+        if not ins_list and not outs_list:
+            return ("none", None)
+
+        # Threshold for triggering a 'headline' sentence — any change at
+        # 35% or above is in the script's Moderate tier or higher, worth
+        # a player name. Below 35% is genuinely fringe (Marginal tier).
+        IMPACT_THRESH = 0.35
+        top_in  = ins_list[0]  if ins_list  and ins_list[0].get("fill")  is not None and ins_list[0].get("fill")  > IMPACT_THRESH else None
+        top_out = outs_list[0] if outs_list and outs_list[0].get("fill") is not None and outs_list[0].get("fill") > IMPACT_THRESH else None
+
+        ranked_count = sum(1 for p in ins_list + outs_list if p.get("fill") is not None)
+        if ranked_count == 0:
+            html = (f'<span class="mc-vd-team">{team_abbr_str}</span> '
+                    f'<span class="mc-vd-quiet">impact data pending</span>')
+            return ("pending", html)
+
+        if top_in or top_out:
+            parts = []
+            if top_out:
+                pct = top_out["fill"] * 100
+                parts.append(f'<span class="mc-vd-team">{team_abbr_str}</span> lose '
+                             f'<span class="mc-vd-name mc-vd-out">{top_out["name"]}</span> '
+                             f'<span class="mc-vd-pct">({pct:.0f}%)</span>')
+            if top_in:
+                pct = top_in["fill"] * 100
+                connector = ' but regain ' if top_out else f'<span class="mc-vd-team">{team_abbr_str}</span> regain '
+                parts.append(f'{connector}'
+                             f'<span class="mc-vd-name mc-vd-in">{top_in["name"]}</span> '
+                             f'<span class="mc-vd-pct">({pct:.0f}%)</span>')
+            return ("headline", "".join(parts))
+
+        return ("minor", team_abbr_str)
+
+    home_kind, home_clause = _verdict_clause(team_abbr(home), home_ins, home_outs)
+    away_kind, away_clause = _verdict_clause(team_abbr(away), away_ins, away_outs)
+
+    # Build the verdict string. If BOTH teams are 'minor', collapse to a
+    # single 'Both teams make minor changes only' line — premium, doesn't
+    # repeat itself. Otherwise mix headline/minor/pending clauses normally.
+    verdict_pieces = []
+    if home_kind == "minor" and away_kind == "minor":
+        verdict_pieces.append('<span class="mc-vd-quiet">Both teams make minor changes only</span>')
+    else:
+        for kind, clause in ((home_kind, home_clause), (away_kind, away_clause)):
+            if kind == "none":
+                continue
+            if kind == "minor":
+                verdict_pieces.append(
+                    f'<span class="mc-vd-team">{clause}</span> '
+                    f'<span class="mc-vd-quiet">make minor changes only</span>'
+                )
+            else:
+                verdict_pieces.append(clause)
+
+    if verdict_pieces:
+        verdict_html = (f'<div class="mc-sel-verdict-line">'
+                        f'  <span class="mc-vd-glyph">▸</span>'
+                        f'  <span class="mc-vd-body">'
+                        f'    {" · ".join(verdict_pieces)}.'
+                        f'  </span>'
+                        f'</div>')
+    else:
+        verdict_html = ""
+
+    # ── Summary line for the collapsed state ────────────────────────────
+    home_ins_n  = len(home_ins);  home_outs_n = len(home_outs)
+    away_ins_n  = len(away_ins);  away_outs_n = len(away_outs)
+    home_unk = any(p.get("fill") is None for p in home_ins + home_outs)
+    away_unk = any(p.get("fill") is None for p in away_ins + away_outs)
+    total_changes = home_ins_n + home_outs_n + away_ins_n + away_outs_n
+
+    # Use the legible-on-dark accent colour for the abbreviation, not the
+    # raw primary background — for navy/black teams (Carlton, Collingwood)
+    # the primary is invisible against our #06060a UI surface.
+    home_chunk = _summary_team_pill(home, home_ins_n, home_outs_n, home_unk, team_accent(home))
+    away_chunk = _summary_team_pill(away, away_ins_n, away_outs_n, away_unk, team_accent(away))
+
+    if total_changes == 0:
+        summary_status_html = ('<span class="mc-sel-sum-status mc-sel-sum-status-quiet">'
+                               'No changes · both squads unchanged'
+                               '</span>')
+        summary_pills_html = ''
+    else:
+        summary_status_html = (f'<span class="mc-sel-sum-status">'
+                               f'{total_changes} change{"s" if total_changes != 1 else ""} this round'
+                               f'</span>')
+        summary_pills_html = (f'<span class="mc-sel-pills-row">'
+                              f'{home_chunk}{away_chunk}'
+                              f'</span>')
 
     return _h(f"""
-    <div class="mc-sel">
-      <div class="mc-sel-head">
-        <span class="mc-sel-head-glyph">⌬</span>
-        <span class="mc-sel-head-lbl">Team Lists · Ins / Outs</span>
+    <details class="mc-sel-disclosure">
+      <summary class="mc-sel-summary">
+        <span class="mc-sel-sum-icon mc-sel-sum-icon-data">⌬</span>
+        <span class="mc-sel-sum-label">
+          <span class="mc-sel-sum-title">Team Lists · Ins / Outs</span>
+          {summary_status_html}
+        </span>
+        <span class="mc-sel-sum-spacer"></span>
+        {summary_pills_html}
+        <span class="mc-sel-cta">
+          <span class="mc-sel-cta-text">Expand</span>
+          <span class="mc-sel-cta-chevron">▾</span>
+        </span>
+      </summary>
+      <div class="mc-sel">
+        {headline_html}
+        {verdict_html}
+        <div class="mc-sel-cols">
+          {home_html}
+          {away_html}
+        </div>
+        <div class="mc-sel-foot">
+          <span class="mc-sel-foot-glyph">◆</span>
+          <span>Headline change · most important player in/out for the team</span>
+          <span class="mc-sel-foot-sep">·</span>
+          <span>Impact % = player's salary rank within their team · proxy for team importance</span>
+        </div>
       </div>
-      <div class="mc-sel-cols">
-        {home_html}
-        {away_html}
-      </div>
-    </div>
+    </details>
     """)
+
+def _rgba_with_alpha(hex_or_rgb, alpha):
+    """Convert a colour string to rgba with the requested alpha. Accepts
+    hex strings like '#4f8fff' or already-rgba strings (returned as-is to
+    avoid double-conversion)."""
+    s = str(hex_or_rgb).strip()
+    if s.startswith("rgba(") or s.startswith("rgb("):
+        return s
+    if s.startswith("#") and len(s) == 7:
+        try:
+            r = int(s[1:3], 16); g = int(s[3:5], 16); b = int(s[5:7], 16)
+            return f"rgba({r},{g},{b},{alpha})"
+        except ValueError:
+            pass
+    return f"rgba(79,143,255,{alpha})"
+
 
 def render_tips(games, tips, sources, top_models, weights, rnd,
                 standings_lookup=None, all_season_games=None):
@@ -2085,9 +2541,47 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
 
     # Fetch the round's team selections (ins/outs + price percentiles) once.
     # Cached for an hour, so this hits the network at most once per session
-    # per round. Returns {} on any failure — the renderer falls back to the
-    # "TEAM LISTS NOT YET NAMED" disclaimer per-card in that case.
-    selections_data = fetch_team_selections()
+    # per round. Returns ({}, status) on any failure — we surface the status
+    # so the user knows whether teams aren't named yet vs. the scraper broke.
+    selections_data, selections_status = fetch_team_selections()
+
+    # Surface a single round-wide status banner ONLY for actionable failures.
+    # The "ok" / "empty" cases are silent — per-card disclaimers handle those.
+    if selections_status == "missing-deps":
+        st.markdown(_h("""
+        <div class="sel-status-banner sel-status-error">
+          <span class="sel-status-glyph">[ ! ]</span>
+          <span class="sel-status-body">
+            <span class="sel-status-k">DEPENDENCY MISSING · TEAM LIST FEED OFFLINE</span>
+            <span class="sel-status-v">Add <code>beautifulsoup4</code> to requirements.txt and redeploy</span>
+          </span>
+        </div>
+        """), unsafe_allow_html=True)
+    elif selections_status == "scrape-failed":
+        st.markdown(_h("""
+        <div class="sel-status-banner sel-status-error">
+          <span class="sel-status-glyph">[ ! ]</span>
+          <span class="sel-status-body">
+            <span class="sel-status-k">TEAM LIST FEED · TEMPORARILY UNAVAILABLE</span>
+            <span class="sel-status-v">Footywire couldn't be reached · ins/outs will populate once the feed recovers</span>
+          </span>
+        </div>
+        """), unsafe_allow_html=True)
+    elif selections_status == "unmapped-teams":
+        unmapped = ", ".join(selections_data.get("_unmapped", []))
+        st.markdown(_h(f"""
+        <div class="sel-status-banner sel-status-warn">
+          <span class="sel-status-glyph">[ ? ]</span>
+          <span class="sel-status-body">
+            <span class="sel-status-k">UNRECOGNISED TEAM SLUG(S)</span>
+            <span class="sel-status-v">Footywire returned: {unmapped} · slug map needs an update</span>
+          </span>
+        </div>
+        """), unsafe_allow_html=True)
+
+    # Strip diagnostic synthetic key so it doesn't end up in lookups
+    if isinstance(selections_data, dict):
+        selections_data = {k: v for k, v in selections_data.items() if k != "_unmapped"}
 
     # Round Edge panel (safest bet / value play / upset watch / coin flip) — sits above the cards
     render_round_edge([g for _, g in sortable], predictions_by_id, standings_lookup)
@@ -3641,164 +4135,1044 @@ st.markdown("""
 .sc-divider-label::before{content:'❯';color:var(--accent);font-size:0.68rem;}
 .sc-divider-line{flex:1;height:1px;background:linear-gradient(90deg,var(--border2),transparent);}
 
-/* ════════ MATCH-CARD TEAM SELECTIONS (ins/outs) ════════ */
-/* Sits inside each match card, between the matchup header and the
-   prediction. Two columns (HOME · AWAY), each with stacked IN / OUT
-   sub-sections. Each player row = name + thin gradient progress bar
-   showing their team-relative AFL Fantasy price percentile. */
-
-.mc-sel{
-  margin:0;
-  padding:14px 14px 12px;
-  border-top:1px solid var(--border);
-  background:linear-gradient(180deg,rgba(255,255,255,0.012),transparent 70%);
+/* Round-wide status banner — shown only when the team-lists feed is broken
+   in some actionable way (missing dependency, scrape failed, slug map gap).
+   Differentiated from the per-card "teams not yet named" disclaimer because
+   *that* is a normal Tuesday/Wednesday state, while these are real problems. */
+.sel-status-banner{
+  margin:14px 14px 0;
+  padding:11px 14px;
+  border-radius:10px;
+  display:flex; align-items:center; gap:10px;
   font-family:var(--mono);
   position:relative;
+  overflow:hidden;
 }
-.mc-sel-head{
-  display:flex; align-items:center; gap:6px;
-  padding:0 0 10px;
-  font-size:0.5rem; font-weight:800;
-  letter-spacing:0.14em; text-transform:uppercase;
-  color:var(--text2);
+.sel-status-error{
+  background:linear-gradient(180deg,rgba(248,113,113,0.07),rgba(248,113,113,0.02));
+  border:1px solid rgba(248,113,113,0.3);
 }
-.mc-sel-head-glyph{font-size:0.62rem;color:var(--accent3);filter:drop-shadow(0 0 4px rgba(34,211,238,0.4));}
-.mc-sel-head-lbl{}
-
-.mc-sel-cols{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:12px;
+.sel-status-error::before{
+  content:''; position:absolute; top:0; left:0; right:0; height:1px;
+  background:linear-gradient(90deg,rgba(248,113,113,0.5),transparent 60%);
 }
-.mc-sel-side{
-  display:flex; flex-direction:column; gap:8px;
-  min-width:0;
+.sel-status-warn{
+  background:linear-gradient(180deg,rgba(251,191,36,0.07),rgba(251,191,36,0.02));
+  border:1px solid rgba(251,191,36,0.3);
 }
-.mc-sel-side-head{
-  display:flex; align-items:center; gap:6px;
-  padding:5px 0 7px 8px;
-  border-left:2px solid;
-  position:relative;
+.sel-status-warn::before{
+  content:''; position:absolute; top:0; left:0; right:0; height:1px;
+  background:linear-gradient(90deg,rgba(251,191,36,0.5),transparent 60%);
 }
-.mc-sel-side-bar{display:none;}  /* the border-left already serves as the team accent */
-.mc-sel-side-name{
-  font-size:0.6rem; font-weight:800;
-  letter-spacing:0.12em;
+.sel-status-glyph{
+  font-size:0.62rem; font-weight:800;
+  letter-spacing:0.02em; padding:3px 6px;
+  border:1px solid; border-radius:2px;
+  flex-shrink:0;
+  animation:glyph-breathe 2.8s ease-in-out infinite;
+}
+.sel-status-error .sel-status-glyph{
+  color:var(--red); border-color:rgba(248,113,113,0.4);
+  background:rgba(248,113,113,0.06);
+}
+.sel-status-warn .sel-status-glyph{
+  color:var(--amber); border-color:rgba(251,191,36,0.4);
+  background:rgba(251,191,36,0.06);
+}
+.sel-status-body{display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sel-status-k{
+  font-size:0.56rem; letter-spacing:0.14em;
+  text-transform:uppercase; font-weight:800;
+}
+.sel-status-error .sel-status-k{color:var(--red);}
+.sel-status-warn .sel-status-k{color:var(--amber);}
+.sel-status-v{
+  font-size:0.56rem; color:var(--text2);
+  letter-spacing:0.01em; line-height:1.4;
+}
+.sel-status-v code{
+  font-family:var(--mono); font-size:0.54rem;
+  padding:1px 5px; background:rgba(255,255,255,0.06);
+  border:1px solid var(--border2); border-radius:2px;
   color:var(--white);
 }
 
-.mc-sel-section{
-  display:flex; flex-direction:column; gap:4px;
+/* ════════ MATCH-CARD TEAM SELECTIONS (ins/outs) ════════ */
+/* Collapsible disclosure that sits between the matchup header and the
+   prediction block. Single-row summary that reads like a Bloomberg ticker:
+   icon, label + status, team count pills, expand CTA. Click anywhere on
+   the row to disclose the full ins/outs canvas beneath. */
+
+/* The disclosure container — flush with rest of the match card chrome */
+.mc-sel-disclosure{
+  margin:0;
+  border-top:1px solid var(--border);
+  background:var(--bg2);
+  font-family:var(--mono);
+  position:relative;
 }
-.mc-sel-section-head{
-  display:flex; align-items:center; gap:5px;
-  padding:0 0 2px;
-  font-size:0.46rem; font-weight:800;
+
+/* Hide native browser disclosure markers */
+.mc-sel-disclosure > summary{list-style:none;}
+.mc-sel-disclosure > summary::-webkit-details-marker{display:none;}
+.mc-sel-disclosure > summary::marker{display:none; content:'';}
+
+/* ── SUMMARY ROW — the always-visible click target ──
+   Bloomberg-style: clear hit area, generous height, single-row hierarchy
+   reads icon → label → counts → CTA. Hover lifts the row, [open] state
+   gives it a deliberate active treatment. */
+.mc-sel-summary{
+  display:flex; align-items:center; gap:14px;
+  padding:14px 14px;
+  cursor:pointer;
+  user-select:none;
+  -webkit-tap-highlight-color:transparent;
+  transition:background 0.18s ease, padding 0.2s ease;
+  position:relative;
+  min-height:64px;
+}
+.mc-sel-summary::after{
+  /* A thin animated underline that runs along the bottom — sets the row
+     apart visually as a 'control', and brightens on hover/[open]. */
+  content:'';
+  position:absolute;
+  left:14px; right:14px; bottom:0;
+  height:1px;
+  background:linear-gradient(90deg,transparent,rgba(34,211,238,0.18),transparent);
+  opacity:0;
+  transition:opacity 0.25s ease;
+}
+.mc-sel-summary:hover{
+  background:linear-gradient(180deg,rgba(34,211,238,0.022),rgba(34,211,238,0.008));
+}
+.mc-sel-summary:hover::after{opacity:1;}
+.mc-sel-summary:focus-visible{
+  outline:1px solid var(--accent3);
+  outline-offset:-3px;
+  border-radius:6px;
+}
+.mc-sel-disclosure-pending .mc-sel-summary:hover{
+  background:linear-gradient(180deg,rgba(251,191,36,0.025),rgba(251,191,36,0.008));
+}
+.mc-sel-disclosure-pending .mc-sel-summary::after{
+  background:linear-gradient(90deg,transparent,rgba(251,191,36,0.22),transparent);
+}
+
+/* Icon at the leading edge — substantial, properly weighted, glyph centered */
+.mc-sel-sum-icon{
+  display:flex; align-items:center; justify-content:center;
+  width:32px; height:32px;
+  flex-shrink:0;
+  border-radius:6px;
+  font-size:0.9rem; font-weight:800;
+  letter-spacing:0;
+  line-height:1;
+  border:1px solid;
+  position:relative;
+}
+.mc-sel-sum-icon-data{
+  color:var(--accent3);
+  background:linear-gradient(135deg,rgba(34,211,238,0.1),rgba(34,211,238,0.025));
+  border-color:rgba(34,211,238,0.32);
+  box-shadow:0 0 14px rgba(34,211,238,0.12), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.mc-sel-sum-icon-pending{
+  color:var(--amber);
+  background:linear-gradient(135deg,rgba(251,191,36,0.12),rgba(251,191,36,0.03));
+  border-color:rgba(251,191,36,0.4);
+  box-shadow:0 0 14px rgba(251,191,36,0.14), inset 0 1px 0 rgba(255,255,255,0.04);
+  font-size:1rem;
+  animation:glyph-breathe 2.8s ease-in-out infinite;
+}
+
+/* Label block — title + status, stacked tightly */
+.mc-sel-sum-label{
+  display:flex; flex-direction:column; gap:3px;
+  min-width:0; flex-shrink:0;
+}
+.mc-sel-sum-title{
+  font-size:0.62rem; font-weight:800;
   letter-spacing:0.16em; text-transform:uppercase;
+  color:var(--white);
+  line-height:1.1;
 }
-.mc-sel-ins   .mc-sel-section-head{color:var(--green);}
-.mc-sel-outs  .mc-sel-section-head{color:var(--red);}
-.mc-sel-section-glyph{font-size:0.6rem;line-height:1;filter:drop-shadow(0 0 4px currentColor);}
-.mc-sel-section-lbl{}
+.mc-sel-sum-status{
+  font-size:0.5rem; font-weight:600;
+  letter-spacing:0.06em;
+  color:var(--text2);
+  line-height:1.2;
+}
+.mc-sel-sum-status-pending{
+  color:var(--amber);
+  font-weight:700;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+}
+.mc-sel-sum-status-quiet{
+  font-style:italic;
+  color:var(--text3);
+}
+
+/* Spacer — pushes pills+CTA to the right edge */
+.mc-sel-sum-spacer{flex:1; min-width:8px;}
+
+/* ── TEAM COUNT PILLS — sit in the middle-right of the summary ──
+   Token-style: team abbr in its colour, vertical hairline divider,
+   IN/OUT counts colour-coded. Reads like a stat ticker entry. */
+.mc-sel-pills-row{
+  display:flex; align-items:center; gap:8px;
+  flex-shrink:0;
+}
+/* Team count pill — premium, team-coloured, properly visible.
+   The team's curated accent colour drives:
+     - A 3px left-edge stripe (dominant team marker)
+     - A faint tinted background gradient (subtle team character)
+     - The team abbreviation rendered in the accent colour
+     - A soft glow behind the abbreviation (gives presence without shouting) */
+.mc-sel-team-pill{
+  display:inline-flex; align-items:center;
+  height:32px;
+  padding:0 12px 0 14px;
+  gap:10px;
+  border-radius:5px;
+  background:linear-gradient(135deg,
+    color-mix(in srgb, var(--team-accent) 8%, transparent) 0%,
+    rgba(255,255,255,0.018) 60%);
+  border:1px solid color-mix(in srgb, var(--team-accent) 22%, var(--border2));
+  position:relative;
+  overflow:hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    0 0 0 0 transparent;
+  transition:box-shadow 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+.mc-sel-team-pill::before{
+  /* Strong left-edge accent stripe — the team marker */
+  content:'';
+  position:absolute;
+  top:6px; bottom:6px; left:4px;
+  width:3px;
+  border-radius:2px;
+  background:var(--team-accent);
+  box-shadow:0 0 8px var(--team-accent);
+  opacity:0.95;
+}
+.mc-sel-team-pill::after{
+  /* A faint inner gradient halo so the team tint extends past the stripe */
+  content:'';
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  background:radial-gradient(circle at 8% 50%,
+    color-mix(in srgb, var(--team-accent) 18%, transparent) 0%,
+    transparent 45%);
+  opacity:0.5;
+}
+.mc-sel-summary:hover .mc-sel-team-pill{
+  border-color:color-mix(in srgb, var(--team-accent) 38%, var(--border2));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    0 0 12px color-mix(in srgb, var(--team-accent) 18%, transparent);
+}
+.mc-sel-pill-abbr{
+  font-size:0.62rem; font-weight:800;
+  letter-spacing:0.14em; text-transform:uppercase;
+  color:var(--team-accent);
+  white-space:nowrap;
+  text-shadow:0 0 8px color-mix(in srgb, var(--team-accent) 50%, transparent);
+  position:relative;
+  z-index:1;
+}
+.mc-sel-pill-divider{
+  width:1px; height:14px;
+  background:rgba(255,255,255,0.08);
+  flex-shrink:0;
+  position:relative; z-index:1;
+}
+.mc-sel-pill-counts{
+  display:inline-flex; align-items:center; gap:7px;
+  font-size:0.7rem; font-weight:800;
+  letter-spacing:-0.01em;
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+  position:relative; z-index:1;
+}
+.mc-sel-pill-in{
+  color:var(--green);
+  text-shadow:0 0 6px rgba(52,211,153,0.4);
+}
+.mc-sel-pill-out{
+  color:var(--red);
+  text-shadow:0 0 6px rgba(248,113,113,0.4);
+}
+.mc-sel-pill-zero{
+  color:var(--text3);
+  opacity:0.55;
+  font-weight:600;
+}
+.mc-sel-pill-sep{
+  color:var(--text3); opacity:0.4;
+  font-weight:400;
+  font-size:0.66rem;
+}
+.mc-sel-pill-unk{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:15px; height:15px;
+  border-radius:50%;
+  background:rgba(251,191,36,0.12);
+  border:1px solid rgba(251,191,36,0.32);
+  color:var(--amber);
+  font-size:0.52rem; font-weight:800;
+  cursor:help;
+  margin-left:4px;
+  position:relative; z-index:1;
+}
+
+/* ── EXPAND CTA — text + chevron in a pill, properly visible ── */
+.mc-sel-cta{
+  display:inline-flex; align-items:center;
+  height:30px;
+  padding:0 12px;
+  gap:7px;
+  border-radius:5px;
+  background:linear-gradient(180deg,
+    rgba(255,255,255,0.04),
+    rgba(255,255,255,0.012));
+  border:1px solid var(--border2);
+  font-family:var(--mono);
+  font-size:0.5rem; font-weight:800;
+  letter-spacing:0.18em; text-transform:uppercase;
+  color:var(--text2);
+  flex-shrink:0;
+  transition:all 0.18s ease;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.mc-sel-summary:hover .mc-sel-cta{
+  background:linear-gradient(180deg,
+    rgba(34,211,238,0.08),
+    rgba(34,211,238,0.025));
+  border-color:rgba(34,211,238,0.3);
+  color:var(--white);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.05),
+             0 0 12px rgba(34,211,238,0.14);
+}
+.mc-sel-disclosure-pending .mc-sel-summary:hover .mc-sel-cta{
+  background:linear-gradient(180deg,
+    rgba(251,191,36,0.1),
+    rgba(251,191,36,0.025));
+  border-color:rgba(251,191,36,0.32);
+  color:var(--white);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.05),
+             0 0 12px rgba(251,191,36,0.16);
+}
+.mc-sel-cta-text{
+  line-height:1;
+}
+.mc-sel-cta-chevron{
+  display:inline-flex; align-items:center; justify-content:center;
+  font-size:0.7rem;
+  line-height:1;
+  transition:transform 0.28s cubic-bezier(0.22,0.61,0.36,1);
+}
+
+/* [open] state — chevron rotates, CTA text changes via :before swap */
+.mc-sel-disclosure[open] > .mc-sel-summary > .mc-sel-cta > .mc-sel-cta-chevron{
+  transform:rotate(180deg);
+}
+.mc-sel-disclosure[open] > .mc-sel-summary > .mc-sel-cta{
+  background:linear-gradient(180deg,
+    rgba(34,211,238,0.12),
+    rgba(34,211,238,0.04));
+  border-color:rgba(34,211,238,0.4);
+  color:var(--accent3);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.05),
+             0 0 14px rgba(34,211,238,0.18);
+}
+.mc-sel-disclosure-pending[open] > .mc-sel-summary > .mc-sel-cta{
+  background:linear-gradient(180deg,
+    rgba(251,191,36,0.14),
+    rgba(251,191,36,0.04));
+  border-color:rgba(251,191,36,0.45);
+  color:var(--amber);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.05),
+             0 0 14px rgba(251,191,36,0.2);
+}
+.mc-sel-disclosure[open] > .mc-sel-summary::after{opacity:1;}
+
+/* When open, swap the CTA text from "Expand" / "Details" to "Close" via
+   CSS — hide the original text, render replacement via ::after. */
+.mc-sel-disclosure[open] > .mc-sel-summary > .mc-sel-cta > .mc-sel-cta-text{
+  font-size:0;  /* hide original text */
+  position:relative;
+}
+.mc-sel-disclosure[open] > .mc-sel-summary > .mc-sel-cta > .mc-sel-cta-text::after{
+  content:'Close';
+  font-size:0.5rem;
+  font-weight:800;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+}
+
+/* Body slide-in animation when expanded */
+.mc-sel-disclosure[open] > .mc-sel,
+.mc-sel-disclosure[open] > .mc-sel-pending-body-wrap{
+  animation:mc-sel-disclose 0.35s cubic-bezier(0.22,0.61,0.36,1) both;
+}
+@keyframes mc-sel-disclose{
+  from{opacity:0; transform:translateY(-4px);}
+  to  {opacity:1; transform:translateY(0);}
+}
+
+/* ── EXPANDED BODY — the actual ins/outs canvas ── */
+.mc-sel{
+  margin:0;
+  padding:0;
+  background:var(--bg2);
+  font-family:var(--mono);
+  position:relative;
+}
+
+/* ── HEADLINE TUG-OF-WAR STRIP ──
+   The 'who upgraded their XI more this week' headline. Two team chips
+   flanking a centre-anchored tension bar that tilts toward whichever
+   side has the bigger absolute net delta. Replaces the redundant section
+   header that used to live here. */
+.mc-sel-headline{
+  display:grid;
+  grid-template-columns:minmax(180px,1.1fr) minmax(140px,1fr) minmax(180px,1.1fr);
+  align-items:center;
+  gap:18px;
+  padding:18px 18px 18px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,
+    rgba(255,255,255,0.018),
+    rgba(255,255,255,0.003) 60%,
+    transparent);
+  position:relative;
+}
+.mc-sel-headline::before{
+  /* Subtle cyan accent strip across the very top */
+  content:'';
+  position:absolute;
+  top:0; left:14%; right:14%;
+  height:1px;
+  background:linear-gradient(90deg,transparent,rgba(34,211,238,0.32),transparent);
+}
+/* Each headline side is a horizontal row: chip + delta inline. The home
+   side reads left-to-right (chip → delta), the away side mirrors it
+   (delta → chip) so eye-flow stays inward toward the centre tug-of-war
+   bar. No more diagonal-zigzag layout. */
+.mc-sel-headline-side{
+  display:flex; align-items:center;
+  gap:14px;
+  min-width:0;
+}
+.mc-sel-headline-home{justify-content:flex-start;}
+.mc-sel-headline-away{justify-content:flex-end;}
+.mc-sel-headline-team{
+  display:flex; align-items:center;
+  flex-shrink:0;
+}
+
+/* Delta chip — number stacks tightly above its label */
+.mc-sel-delta-chip{
+  display:flex; flex-direction:column;
+  align-items:flex-start;
+  gap:2px;
+  min-width:0;
+}
+.mc-sel-headline-away .mc-sel-delta-chip{
+  align-items:flex-end;
+}
+.mc-sel-delta-num{
+  font-size:1.7rem; font-weight:800;
+  letter-spacing:-0.035em;
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+  text-shadow:0 0 14px currentColor;
+  filter:brightness(1.05);
+}
+.mc-sel-delta-num-neutral{
+  color:var(--text3);
+  text-shadow:none;
+  filter:none;
+  font-weight:700;
+  font-size:1.4rem;
+}
+.mc-sel-delta-lbl{
+  font-size:0.46rem; font-weight:800;
+  letter-spacing:0.18em; text-transform:uppercase;
+  line-height:1;
+}
+
+/* The tug-of-war bar in the centre column */
+.mc-sel-headline-tug{
+  display:flex; flex-direction:column;
+  gap:6px;
+  align-items:center;
+  min-width:0;
+}
+.mc-sel-headline-bar{
+  display:flex;
+  width:100%;
+  height:8px;
+  background:rgba(255,255,255,0.04);
+  border-radius:4px;
+  overflow:hidden;
+  position:relative;
+  border:1px solid rgba(255,255,255,0.04);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,0.3);
+}
+.mc-sel-headline-bar-h,
+.mc-sel-headline-bar-a{
+  height:100%;
+  min-width:2px;
+  transform-origin:center;
+  animation:mc-sel-tug-grow 0.9s cubic-bezier(0.22,0.61,0.36,1) 0.15s both;
+}
+.mc-sel-headline-bar-h{transform-origin:right;}
+.mc-sel-headline-bar-a{transform-origin:left;}
+@keyframes mc-sel-tug-grow{
+  from{transform:scaleX(0);}
+  to  {transform:scaleX(1);}
+}
+.mc-sel-headline-bar-knot{
+  width:2px;
+  background:rgba(255,255,255,0.18);
+  flex-shrink:0;
+  position:relative;
+}
+.mc-sel-headline-bar-knot::before,
+.mc-sel-headline-bar-knot::after{
+  content:'';
+  position:absolute;
+  left:50%; transform:translateX(-50%);
+  width:6px; height:6px;
+  border-radius:50%;
+  background:var(--bg2);
+  border:1px solid rgba(255,255,255,0.18);
+}
+.mc-sel-headline-bar-knot::before{top:-3px;}
+.mc-sel-headline-bar-knot::after{bottom:-3px;}
+.mc-sel-headline-axis{
+  font-size:0.4rem; font-weight:700;
+  color:var(--text3);
+  letter-spacing:0.22em; text-transform:uppercase;
+  line-height:1;
+}
+
+/* ── VERDICT LINE ── */
+/* Auto-composed natural-language summary, sits between the tug-of-war
+   headline and the player grid. The "story" the punter actually reads. */
+.mc-sel-verdict-line{
+  display:flex; align-items:flex-start; gap:9px;
+  padding:11px 16px 12px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,
+    rgba(34,211,238,0.012),
+    transparent);
+  font-family:var(--mono);
+  position:relative;
+}
+.mc-sel-verdict-line::before{
+  content:'';
+  position:absolute;
+  top:0; left:14%; right:14%;
+  height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.04),transparent);
+}
+.mc-vd-glyph{
+  flex-shrink:0;
+  font-size:0.62rem; line-height:1.4;
+  color:var(--accent3);
+  filter:drop-shadow(0 0 4px rgba(34,211,238,0.5));
+}
+.mc-vd-body{
+  font-size:0.58rem; line-height:1.55;
+  color:var(--text2);
+  letter-spacing:0.01em;
+  font-weight:500;
+}
+.mc-vd-team{
+  font-weight:800;
+  color:var(--white);
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+}
+.mc-vd-name{
+  font-weight:700;
+  color:var(--white);
+}
+.mc-vd-out{
+  color:var(--red);
+  text-shadow:0 0 6px rgba(248,113,113,0.25);
+}
+.mc-vd-in{
+  color:var(--green);
+  text-shadow:0 0 6px rgba(52,211,153,0.25);
+}
+.mc-vd-pct{
+  font-size:0.85em;
+  color:var(--text3);
+  font-variant-numeric:tabular-nums;
+  letter-spacing:0.02em;
+  font-weight:600;
+}
+.mc-vd-quiet{
+  color:var(--text3);
+  font-style:italic;
+  font-weight:500;
+}
+
+/* Side footer note — appears when one team made far fewer changes
+   than the other, so the empty vertical space reads as 'fewer changes'
+   not 'missing data'. */
+.mc-sel-side-footer{
+  margin-top:6px;
+  padding:8px 0 4px;
+  border-top:1px dashed rgba(255,255,255,0.04);
+  font-size:0.5rem;
+  color:var(--text3);
+  letter-spacing:0.04em;
+  font-style:italic;
+  font-weight:500;
+}
+
+/* Partial-data delta number — magnitude only with arrow prefix */
+.mc-sel-delta-num-partial{
+  font-size:1.4rem;
+  display:inline-flex; align-items:baseline;
+  gap:3px;
+}
+.mc-sel-delta-arrow{
+  font-size:0.7em;
+  opacity:0.85;
+}
+
+/* Dim variant of the tug-of-war fill — used when one side has no data,
+   so the bar still renders symmetrically but the empty side reads as
+   "no signal" rather than "tiny signal". */
+.mc-sel-headline-bar-dim{
+  background:repeating-linear-gradient(
+    90deg,
+    rgba(255,255,255,0.04) 0,
+    rgba(255,255,255,0.04) 3px,
+    rgba(255,255,255,0.015) 3px,
+    rgba(255,255,255,0.015) 6px
+  ) !important;
+  opacity:0.45;
+}
+
+/* ── TWO-COLUMN PLAYER GRID ── */
+.mc-sel-cols{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:0;
+  padding:18px 16px 16px;
+}
+.mc-sel-side{
+  display:flex; flex-direction:column; gap:14px;
+  padding:0 16px;
+  min-width:0;
+}
+.mc-sel-side:first-child{
+  padding-left:0;
+  border-right:1px solid var(--border);
+}
+.mc-sel-side:last-child{
+  padding-right:0;
+}
+.mc-sel-side-body{
+  display:flex; flex-direction:column; gap:14px;
+}
+
+/* ── IN / OUT sub-sections ── */
+.mc-sel-section{display:flex; flex-direction:column; gap:9px;}
+.mc-sel-section-head{
+  display:grid;
+  /* Locked bar column at exactly 220px — guarantees identical bar widths
+     across both home and away sides, regardless of name length or viewport.
+     Name column flexes to fill remaining space and truncates if needed. */
+  grid-template-columns:minmax(0,1fr) 220px;
+  gap:14px;
+  align-items:center;
+  padding:6px 0 7px;
+  font-size:0.5rem; font-weight:800;
+  letter-spacing:0.18em; text-transform:uppercase;
+  border-bottom:1px solid;
+  position:relative;
+}
+.mc-sel-section-head-l{
+  display:flex; align-items:center; gap:8px;
+  min-width:0;
+}
+.mc-sel-section-head-r{
+  display:flex; align-items:center; justify-content:flex-end;
+  padding-right:0;
+}
+.mc-sel-section-axis{
+  font-size:0.42rem; font-weight:700;
+  letter-spacing:0.2em; text-transform:uppercase;
+  color:var(--text3);
+  font-family:var(--mono);
+  white-space:nowrap;
+}
+.mc-sel-section-head::before{
+  /* Stronger left accent stripe — clearly demarcates IN vs OUT in the scan */
+  content:'';
+  position:absolute;
+  left:0; bottom:-1px;
+  width:42px; height:2px;
+  background:currentColor;
+  filter:drop-shadow(0 0 4px currentColor);
+}
+.mc-sel-ins  .mc-sel-section-head{color:var(--green); border-bottom-color:rgba(52,211,153,0.22);}
+.mc-sel-outs .mc-sel-section-head{color:var(--red);   border-bottom-color:rgba(248,113,113,0.22);}
+.mc-sel-section-glyph{
+  font-size:0.66rem; line-height:1;
+  filter:drop-shadow(0 0 5px currentColor);
+}
+.mc-sel-section-lbl{}  /* sits naturally inline now */
 .mc-sel-section-n{
-  margin-left:auto;
-  font-size:0.42rem; color:var(--text3); letter-spacing:0.1em;
-  font-weight:700; padding:1px 5px;
-  border:1px solid var(--border2); border-radius:2px;
-  background:rgba(255,255,255,0.02);
+  /* Count chip — sits inline next to the section label, not floating
+     at the far right edge. Reads as "IN · 3" style metadata. */
+  font-size:0.46rem; font-weight:800;
+  letter-spacing:0.06em;
+  color:var(--text);
+  padding:2px 7px;
+  border-radius:3px;
+  background:rgba(255,255,255,0.045);
+  border:1px solid rgba(255,255,255,0.06);
+  font-variant-numeric:tabular-nums;
+  min-width:18px;
+  text-align:center;
+  line-height:1;
+}
+.mc-sel-ins  .mc-sel-section-n{
+  background:rgba(52,211,153,0.06);
+  border-color:rgba(52,211,153,0.18);
+  color:var(--green);
+}
+.mc-sel-outs .mc-sel-section-n{
+  background:rgba(248,113,113,0.06);
+  border-color:rgba(248,113,113,0.18);
+  color:var(--red);
 }
 
-.mc-sel-rows{display:flex;flex-direction:column;gap:5px;}
-
+/* ── PLAYER ROWS ── */
+.mc-sel-rows{display:flex; flex-direction:column; gap:7px;}
 .mc-sel-row{
   display:grid;
-  grid-template-columns:1fr 60px;
-  gap:8px;
+  /* Bar column locked to exactly 220px to match the section-head template
+     above. This guarantees pixel-identical bar widths across home/away,
+     regardless of name length or viewport width. Name column flexes. */
+  grid-template-columns:minmax(0,1fr) 220px;
+  gap:14px;
   align-items:center;
   padding:1px 0;
+  /* Stagger animation — each row enters in sequence, 60ms apart, after
+     the disclosure opens. Uses --row-i CSS var set inline per row. */
+  opacity:0;
+  animation:mc-sel-row-in 0.35s cubic-bezier(0.22,0.61,0.36,1)
+            calc(0.18s + var(--row-i, 0) * 0.06s) forwards;
 }
+@keyframes mc-sel-row-in{
+  from{opacity:0; transform:translateX(-4px);}
+  to  {opacity:1; transform:translateX(0);}
+}
+
+/* Headline row — the highest-impact change in each section. Tinted
+   background stripe in the section's colour family, bolder name,
+   prominent sigil. Lands first in the eye scan. */
+.mc-sel-row-headline{
+  position:relative;
+  padding:5px 8px 5px 10px;
+  margin:0 -8px 0 -10px;
+  border-radius:4px;
+}
+.mc-sel-row-headline-out{
+  background:linear-gradient(90deg,
+    rgba(248,113,113,0.06) 0%,
+    rgba(248,113,113,0.02) 100%);
+  box-shadow:inset 2px 0 0 rgba(248,113,113,0.45);
+}
+.mc-sel-row-headline-in{
+  background:linear-gradient(90deg,
+    rgba(52,211,153,0.06) 0%,
+    rgba(52,211,153,0.02) 100%);
+  box-shadow:inset 2px 0 0 rgba(52,211,153,0.45);
+}
+.mc-sel-row-headline .mc-sel-name-text{
+  color:var(--white);
+  font-weight:800;
+  letter-spacing:0.01em;
+}
+
+/* Subtle hover state on every row — feels interactive, brightens the
+   percentile label so the data 'wakes up' under the cursor. */
+.mc-sel-row{transition:background 0.18s ease;}
+.mc-sel-row:not(.mc-sel-row-headline):hover{
+  background:rgba(255,255,255,0.018);
+  border-radius:3px;
+}
+
 .mc-sel-name{
-  font-size:0.56rem; font-weight:700;
+  display:flex; align-items:center; gap:7px;
+  min-width:0;
+  font-size:0.62rem; font-weight:700;
   color:var(--white); letter-spacing:0.02em;
+  line-height:1.3;
+}
+.mc-sel-name-text{
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   min-width:0;
 }
 .mc-sel-row-unknown .mc-sel-name{color:var(--text2);}
-.mc-sel-bar{}
+.mc-sel-row-unknown .mc-sel-name-text{
+  color:var(--text2);
+  font-weight:600;
+}
+
+/* The leading sigil for the headline row — bigger, more present */
+.mc-sel-row-sigil{
+  flex-shrink:0;
+  font-size:0.62rem; line-height:1;
+  width:11px; text-align:center;
+  margin-right:1px;
+}
+.mc-sel-outs .mc-sel-row-sigil{
+  color:var(--red);
+  filter:drop-shadow(0 0 5px rgba(248,113,113,0.6));
+}
+.mc-sel-ins  .mc-sel-row-sigil{
+  color:var(--green);
+  filter:drop-shadow(0 0 5px rgba(52,211,153,0.6));
+}
+
+/* Inline impact tags — small chips on the headline row classifying the
+   magnitude of the change. Reads like a Bloomberg news flag. */
+.mc-sel-tag{
+  flex-shrink:0;
+  display:inline-flex; align-items:center;
+  font-size:0.42rem; font-weight:800;
+  letter-spacing:0.14em; text-transform:uppercase;
+  padding:2px 6px;
+  border-radius:2px;
+  margin-left:6px;
+  line-height:1;
+  border:1px solid;
+  white-space:nowrap;
+}
+.mc-sel-tag-blow{
+  color:var(--red);
+  background:rgba(248,113,113,0.1);
+  border-color:rgba(248,113,113,0.4);
+  box-shadow:0 0 6px rgba(248,113,113,0.18);
+  text-shadow:0 0 4px rgba(248,113,113,0.4);
+}
+.mc-sel-tag-notable{
+  color:var(--amber);
+  background:rgba(251,191,36,0.08);
+  border-color:rgba(251,191,36,0.35);
+}
+.mc-sel-tag-key{
+  color:var(--green);
+  background:rgba(52,211,153,0.1);
+  border-color:rgba(52,211,153,0.4);
+  box-shadow:0 0 6px rgba(52,211,153,0.18);
+  text-shadow:0 0 4px rgba(52,211,153,0.4);
+}
+.mc-sel-tag-boost{
+  color:var(--accent3);
+  background:rgba(34,211,238,0.08);
+  border-color:rgba(34,211,238,0.35);
+}
+
+/* Bar wrap holds track + percentile label */
+.mc-sel-bar-wrap{
+  display:flex; align-items:center; gap:8px;
+}
 .mc-sel-bar-track{
   position:relative;
-  height:5px;
-  background:rgba(255,255,255,0.04);
+  flex:1;
+  height:6px;
+  background:linear-gradient(180deg,
+    rgba(255,255,255,0.022),
+    rgba(255,255,255,0.05));
   border-radius:3px;
   overflow:hidden;
-  border:1px solid rgba(255,255,255,0.025);
+  border:1px solid rgba(255,255,255,0.04);
+  box-shadow:
+    inset 0 1px 2px rgba(0,0,0,0.32),
+    inset 0 0 0 1px rgba(255,255,255,0.012);
 }
 .mc-sel-bar-fill{
   position:absolute; top:0; bottom:0; left:0;
   border-radius:3px;
-  transition:width 0.6s cubic-bezier(0.22,0.61,0.36,1);
-  box-shadow:0 0 6px rgba(255,255,255,0.04);
-  width:0;  /* animated to target via animation */
-  animation:mc-sel-bar-grow 0.7s cubic-bezier(0.22,0.61,0.36,1) forwards;
+  transform-origin:left;
+  animation:mc-sel-bar-grow 0.85s cubic-bezier(0.22,0.61,0.36,1)
+            calc(0.28s + var(--row-i, 0) * 0.06s) both;
 }
-.mc-sel-bar-fill-unknown{
-  background:repeating-linear-gradient(45deg,rgba(255,255,255,0.05) 0,rgba(255,255,255,0.05) 3px,rgba(255,255,255,0.02) 3px,rgba(255,255,255,0.02) 6px) !important;
-  box-shadow:none;
+.mc-sel-bar-fill::after{
+  /* Bright leading-edge highlight — tiny vertical line at the right of
+     the fill, sells the "live, populating" feel. */
+  content:'';
+  position:absolute;
+  right:0; top:0; bottom:0;
+  width:1.5px;
+  background:rgba(255,255,255,0.3);
+  box-shadow:0 0 6px rgba(255,255,255,0.4);
 }
 @keyframes mc-sel-bar-grow{
-  from{transform:scaleX(0);transform-origin:left;}
-  to  {transform:scaleX(1);transform-origin:left;}
+  from{transform:scaleX(0);}
+  to  {transform:scaleX(1);}
 }
-.mc-sel-empty{
-  font-size:0.5rem; color:var(--text3);
-  letter-spacing:0.1em; text-transform:uppercase;
-  font-style:italic; padding:6px 0 4px;
+.mc-sel-bar-nub{
+  position:absolute; top:50%; left:2px;
+  transform:translateY(-50%);
+  width:4px; height:3px;
+  background:var(--text3);
+  border-radius:1px;
+  opacity:0.5;
 }
 
-/* Per-card disclaimer when teams haven't been named yet */
+/* Percentile label — micro-mono digit, right-aligned, dim by default,
+   brightens on hover. Sits beside the bar at fixed width so all rows
+   line up vertically. */
+.mc-sel-bar-pct{
+  flex-shrink:0;
+  width:32px; text-align:right;
+  font-size:0.52rem; font-weight:700;
+  color:var(--text2);
+  font-variant-numeric:tabular-nums;
+  letter-spacing:0.02em;
+  font-family:var(--mono);
+  opacity:0;
+  animation:mc-sel-pct-in 0.4s ease
+            calc(0.55s + var(--row-i, 0) * 0.06s) forwards;
+}
+.mc-sel-bar-pct-unit{
+  /* Unit symbol — quieter than the number, so eye reads "45" first */
+  font-size:0.78em;
+  font-weight:600;
+  opacity:0.55;
+  margin-left:1px;
+}
+@keyframes mc-sel-pct-in{
+  to{opacity:0.85;}
+}
+.mc-sel-row:hover .mc-sel-bar-pct{
+  opacity:1;
+  color:var(--white);
+}
+.mc-sel-row:hover .mc-sel-bar-pct-unit{opacity:0.7;}
+.mc-sel-row-unknown .mc-sel-bar-pct{display:none;}
+
+.mc-sel-empty{
+  font-size:0.54rem; color:var(--text3);
+  letter-spacing:0.04em;
+  font-style:italic;
+  padding:6px 4px 4px;
+}
+
+/* Footnote at the bottom — explains the sigil and the bar scale */
+.mc-sel-foot{
+  display:flex; align-items:center; gap:8px;
+  flex-wrap:wrap;
+  padding:12px 16px 14px;
+  border-top:1px dashed rgba(255,255,255,0.05);
+  font-size:0.46rem; font-weight:600;
+  letter-spacing:0.08em; text-transform:uppercase;
+  color:var(--text3);
+  background:rgba(255,255,255,0.005);
+}
+.mc-sel-foot-glyph{
+  color:var(--accent3);
+  font-size:0.54rem;
+  filter:drop-shadow(0 0 3px rgba(34,211,238,0.4));
+}
+.mc-sel-foot-sep{
+  color:var(--text3); opacity:0.4;
+  margin:0 4px;
+}
+
+/* Pending body wrapper — sits inside the [open] disclosure when no data */
+.mc-sel-pending-body-wrap{background:var(--bg2);}
 .mc-sel-pending{
   margin:0;
-  padding:11px 14px;
-  border-top:1px solid var(--border);
+  padding:18px 16px 18px;
   background:linear-gradient(180deg,rgba(251,191,36,0.05),rgba(251,191,36,0.01));
-  display:flex; align-items:center; gap:10px;
+  display:flex; align-items:flex-start; gap:11px;
   font-family:var(--mono);
   position:relative;
 }
-.mc-sel-pending::before{
-  content:''; position:absolute;
-  top:0; left:0; right:0; height:1px;
-  background:linear-gradient(90deg,rgba(251,191,36,0.3),transparent 60%);
-}
 .mc-sel-pending-glyph{
-  font-size:0.58rem; font-weight:800; color:var(--amber);
-  letter-spacing:0.02em; padding:2px 5px;
-  border:1px solid rgba(251,191,36,0.35);
+  font-size:0.6rem; font-weight:800; color:var(--amber);
+  letter-spacing:0.02em; padding:3px 6px;
+  border:1px solid rgba(251,191,36,0.4);
   border-radius:2px;
-  background:rgba(251,191,36,0.06);
+  background:rgba(251,191,36,0.07);
   flex-shrink:0;
   animation:glyph-breathe 2.8s ease-in-out infinite;
 }
-.mc-sel-pending-body{
-  display:flex; flex-direction:column; gap:2px;
-  min-width:0;
-}
+.mc-sel-pending-body{display:flex; flex-direction:column; gap:5px; min-width:0;}
 .mc-sel-pending-k{
-  font-size:0.5rem; color:var(--amber);
-  letter-spacing:0.14em; text-transform:uppercase;
+  font-size:0.54rem; color:var(--amber);
+  letter-spacing:0.16em; text-transform:uppercase;
   font-weight:800;
 }
 .mc-sel-pending-v{
-  font-size:0.54rem; color:var(--text2);
-  letter-spacing:0.01em; line-height:1.4;
+  font-size:0.58rem; color:var(--text2);
+  letter-spacing:0.01em; line-height:1.5;
 }
 
-/* Mobile — collapse selections to single column on narrow screens */
+/* Mobile — collapse summary to two rows; pills wrap below the label */
 @media (max-width:520px){
-  .mc-sel{padding:12px 12px 10px;}
-  .mc-sel-cols{grid-template-columns:1fr;gap:14px;}
-  .mc-sel-side-head{padding:4px 0 6px 7px;}
-  .mc-sel-pending{padding:10px 12px;gap:8px;}
+  .mc-sel-summary{
+    flex-wrap:wrap;
+    padding:12px 12px;
+    gap:10px;
+    min-height:auto;
+  }
+  .mc-sel-sum-icon{width:28px; height:28px; font-size:0.82rem;}
+  .mc-sel-sum-spacer{display:none;}
+  .mc-sel-pills-row{
+    order:3;
+    width:100%;
+    flex-wrap:wrap;
+    margin-top:4px;
+  }
+  .mc-sel-team-pill{height:26px; padding:0 9px; gap:7px;}
+  .mc-sel-pill-abbr{font-size:0.56rem;}
+  .mc-sel-pill-counts{font-size:0.62rem;}
+  .mc-sel-cta{height:28px; padding:0 10px; font-size:0.46rem;}
+
+  /* Headline tug-of-war stacks vertically on mobile so it stays readable */
+  .mc-sel-headline{
+    grid-template-columns:1fr;
+    padding:14px 12px;
+    gap:10px;
+  }
+  .mc-sel-headline-side{align-items:center!important; flex-direction:row!important; gap:10px;}
+  .mc-sel-headline-home{justify-content:flex-start;}
+  .mc-sel-headline-away{justify-content:flex-end;}
+  .mc-sel-headline-away .mc-sel-delta-chip{flex-direction:row;}
+  .mc-sel-delta-num{font-size:1.3rem;}
+  .mc-sel-headline-tug{order:99; width:100%;}
+
+  /* Player grid collapses to single column with horizontal divider */
+  .mc-sel-cols{grid-template-columns:1fr; gap:0; padding:14px 12px 12px;}
+  .mc-sel-side{padding:0; gap:12px;}
+  .mc-sel-side:first-child{
+    padding:0 0 14px 0;
+    border-right:none;
+    border-bottom:1px solid var(--border);
+    margin-bottom:14px;
+  }
+  .mc-sel-row{grid-template-columns:1fr 110px;}
+  .mc-sel-section-head{grid-template-columns:1fr 110px;}
+  .mc-sel-foot{padding:10px 12px 12px; font-size:0.42rem;}
+  .mc-sel-pending{padding:16px 12px; gap:9px;}
 }
 
 /* ════════ ROUND EDGE PANEL ════════ */
@@ -6268,3 +7642,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

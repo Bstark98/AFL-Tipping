@@ -5126,12 +5126,18 @@ st.markdown("""
   letter-spacing:0.01em; line-height:1.5;
 }
 
-/* Mobile — collapse summary to two rows; pills wrap below the label */
+/* ════════ MOBILE — MINIMALISTIC SCAN VIEW ════════
+   On phones (<520px) the panel collapses to a dense single-column scan.
+   Everything that earns its space on a wide screen — tug-of-war headline
+   strip, verdict line, section accent stripes, side footer notes — gets
+   stripped or simplified, since on a 380px-wide phone the data IS the
+   product. Punter wants name + bar + percent in one tight column. */
 @media (max-width:520px){
+  /* ── Summary row — compact, wraps gracefully ── */
   .mc-sel-summary{
     flex-wrap:wrap;
-    padding:12px 12px;
-    gap:10px;
+    padding:11px 12px;
+    gap:9px;
     min-height:auto;
   }
   .mc-sel-sum-icon{width:28px; height:28px; font-size:0.82rem;}
@@ -5142,37 +5148,115 @@ st.markdown("""
     flex-wrap:wrap;
     margin-top:4px;
   }
-  .mc-sel-team-pill{height:26px; padding:0 9px; gap:7px;}
+  .mc-sel-team-pill{height:26px; padding:0 10px 0 12px; gap:8px;}
   .mc-sel-pill-abbr{font-size:0.56rem;}
   .mc-sel-pill-counts{font-size:0.62rem;}
   .mc-sel-cta{height:28px; padding:0 10px; font-size:0.46rem;}
 
-  /* Headline tug-of-war stacks vertically on mobile so it stays readable */
-  .mc-sel-headline{
-    grid-template-columns:1fr;
-    padding:14px 12px;
-    gap:10px;
-  }
-  .mc-sel-headline-side{align-items:center!important; flex-direction:row!important; gap:10px;}
-  .mc-sel-headline-home{justify-content:flex-start;}
-  .mc-sel-headline-away{justify-content:flex-end;}
-  .mc-sel-headline-away .mc-sel-delta-chip{flex-direction:row;}
-  .mc-sel-delta-num{font-size:1.3rem;}
-  .mc-sel-headline-tug{order:99; width:100%;}
+  /* ── Headline tug-of-war — hidden on mobile ──
+     Desktop's tug-of-war strip (chip + delta + bar + delta + chip) breaks
+     down badly on mobile — chips drop to separate rows, bar floats below,
+     vertical waste is significant. The verdict line below covers the
+     same information in plain English ("FRE regain X (45%) · HAW lose
+     Y (37%)") which reads better on a narrow screen anyway.
+     We just hide the headline entirely; the verdict line carries the day. */
+  .mc-sel-headline{display:none;}
 
-  /* Player grid collapses to single column with horizontal divider */
-  .mc-sel-cols{grid-template-columns:1fr; gap:0; padding:14px 12px 12px;}
-  .mc-sel-side{padding:0; gap:12px;}
+  /* ── Verdict line — kept, but tightened ──
+     The natural-language sentence is the perfect mobile premium — one
+     line, names visible, percentages right there. Just compress padding
+     and slightly smaller font so it doesn't dominate. */
+  .mc-sel-verdict-line{
+    padding:10px 12px 11px;
+    gap:7px;
+  }
+  .mc-sel-verdict-line::before{display:none;}  /* drop the top hairline */
+  .mc-vd-glyph{font-size:0.56rem;}
+  .mc-vd-body{font-size:0.54rem; line-height:1.5;}
+
+  /* ── Player grid — single dense column ── */
+  .mc-sel-cols{
+    grid-template-columns:1fr;
+    gap:0;
+    padding:10px 12px 8px;
+  }
+  .mc-sel-side{padding:0; gap:10px;}
+  /* Hairline divider between the two teams' lists, no extra padding */
   .mc-sel-side:first-child{
-    padding:0 0 14px 0;
+    padding:0 0 10px 0;
     border-right:none;
     border-bottom:1px solid var(--border);
-    margin-bottom:14px;
+    margin-bottom:10px;
   }
-  .mc-sel-row{grid-template-columns:1fr 110px;}
-  .mc-sel-section-head{grid-template-columns:1fr 110px;}
-  .mc-sel-foot{padding:10px 12px 12px; font-size:0.42rem;}
-  .mc-sel-pending{padding:16px 12px; gap:9px;}
+  /* Side footer ('All other players unchanged') is desktop-only filler.
+     On mobile the visual emptiness between teams is gone (they stack)
+     so the footer is just noise. */
+  .mc-sel-side-footer{display:none;}
+
+  /* ── Section headers — slim, dense ──
+     Drop the underline border, drop the glowing accent stripe, drop the
+     count-chip pill background. Reduce to a single inline line. */
+  .mc-sel-section{gap:6px;}
+  .mc-sel-section-head{
+    grid-template-columns:1fr auto;
+    padding:3px 0 4px;
+    border-bottom:none;
+    font-size:0.46rem;
+    gap:8px;
+  }
+  .mc-sel-section-head::before{display:none;}  /* drop the glow stripe */
+  .mc-sel-section-head-l{gap:6px;}
+  .mc-sel-section-glyph{font-size:0.6rem;}
+  /* Count chip → unboxed inline number, just shows '· 3' next to label */
+  .mc-sel-section-n{
+    background:transparent !important;
+    border:none !important;
+    padding:0 !important;
+    min-width:0;
+    font-size:0.5rem;
+    font-weight:700;
+    opacity:0.85;
+  }
+  .mc-sel-section-axis{font-size:0.38rem; opacity:0.6;}
+
+  /* ── Player rows — tight, no headline-row decoration ──
+     Headline-row tinted background + accent stripe is desktop polish.
+     On mobile, just bold the name + keep the sigil. Saves ~10px per
+     headline row of vertical chrome. */
+  .mc-sel-rows{gap:5px;}
+  .mc-sel-row{
+    grid-template-columns:minmax(0,1fr) 130px;
+    gap:10px;
+  }
+  .mc-sel-row-headline{
+    padding:0;
+    margin:0;
+    background:transparent !important;
+    box-shadow:none !important;
+    border-radius:0;
+  }
+  .mc-sel-row:not(.mc-sel-row-headline):hover{background:transparent;}
+  .mc-sel-name{font-size:0.6rem; gap:5px;}
+  .mc-sel-row-sigil{font-size:0.56rem; width:9px;}
+  /* Inline impact tags — keep only on the headline row, but compress */
+  .mc-sel-tag{
+    font-size:0.38rem;
+    padding:1px 5px;
+    margin-left:5px;
+    letter-spacing:0.1em;
+  }
+  .mc-sel-bar-track{height:5px;}
+  .mc-sel-bar-pct{font-size:0.46rem; width:28px;}
+
+  /* Footnote at the very bottom — tighten, smaller font */
+  .mc-sel-foot{
+    padding:9px 12px 11px;
+    font-size:0.4rem;
+    gap:6px;
+    letter-spacing:0.06em;
+  }
+  .mc-sel-foot-glyph{font-size:0.46rem;}
+  .mc-sel-pending{padding:14px 12px; gap:9px;}
 }
 
 /* ════════ ROUND EDGE PANEL ════════ */
@@ -7642,4 +7726,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -745,30 +745,240 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .mc-venue{padding:6px 12px 5px;font-family:var(--mono);font-size:0.54rem;color:var(--text2);letter-spacing:0.02em;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:5px;}
 .mc-venue::before{content:'⌖';color:var(--text3);font-size:0.7rem;}
 
-.mc-matchup{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:12px 12px;gap:8px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,transparent,rgba(255,255,255,0.01));}
+.mc-matchup{display:grid;grid-template-columns:1fr auto 1fr;align-items:start;padding:12px 12px 16px;gap:8px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,transparent,rgba(255,255,255,0.01));}
 .mc-mt{display:flex;flex-direction:column;align-items:center;gap:5px;text-align:center;}
-.mc-mt-logo{width:36px;height:36px;object-fit:contain;filter:drop-shadow(0 0 6px rgba(255,255,255,0.1));}
-.mc-mt-abbr{font-family:var(--mono);font-size:0.7rem;font-weight:800;letter-spacing:0.02em;color:var(--white);}
-.mc-mt-name{font-family:var(--mono);font-size:0.5rem;color:var(--text2);letter-spacing:0.04em;text-transform:uppercase;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.mc-mt-prob{font-family:var(--mono);font-size:0.58rem;font-weight:700;margin-top:2px;letter-spacing:-0.01em;padding:1px 6px;border-radius:2px;border:1px solid;}
+/* Headline elements — these are the HERO of each match card. The team
+   logo, abbreviation, name, form, ladder, and confidence chip should
+   visually dominate the column. The ins/outs below are supplementary —
+   sized smaller so the eye lands on the headline first. */
+.mc-mt-logo{width:56px;height:56px;object-fit:contain;filter:drop-shadow(0 0 10px rgba(255,255,255,0.12));}
+.mc-mt-abbr{font-family:var(--mono);font-size:1.05rem;font-weight:800;letter-spacing:0.04em;color:var(--white);margin-top:2px;}
+.mc-mt-name{font-family:var(--mono);font-size:0.56rem;color:var(--text2);letter-spacing:0.06em;text-transform:uppercase;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mc-mt-prob{font-family:var(--mono);font-size:0.66rem;font-weight:700;margin-top:4px;letter-spacing:-0.01em;padding:3px 10px;border-radius:3px;border:1px solid;}
 
-.mc-form-dots{display:inline-flex;align-items:center;gap:3px;padding:1px 0;}
-.mc-form-empty{font-family:var(--mono);font-size:0.52rem;color:var(--text3);letter-spacing:0.05em;}
-.form-dot{width:7px;height:7px;border-radius:50%;display:inline-block;border:1px solid;transition:transform 0.1s;}
+/* ════════ INLINE TEAM SELECTIONS (ins/outs under team header) ════════
+   Compact stack of player rows that sits inside each team's matchup-header
+   column, directly under the confidence chip. Same dark canvas background
+   as the rest of the header, no separate boxed chrome. Each row: name on
+   the left, bar in the middle, percentage on the right. */
+.mc-mt-sel{
+  width:100%;
+  margin-top:44px;
+  display:flex;
+  flex-direction:column;
+  gap:9px;
+  font-family:var(--mono);
+  text-align:left;
+}
+.mc-mt-sel-section{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+.mc-mt-sel-section-head{
+  display:flex; align-items:center; gap:6px;
+  padding:0 0 3px;
+  font-size:0.4rem; font-weight:700;
+  letter-spacing:0.16em; text-transform:uppercase;
+  opacity:0.85;
+}
+.mc-mt-sel-ins  .mc-mt-sel-section-head{color:var(--green);}
+.mc-mt-sel-outs .mc-mt-sel-section-head{color:var(--red);}
+.mc-mt-sel-section-glyph{
+  font-size:0.46rem; line-height:1;
+  /* No drop-shadow — keep the supplementary data quiet */
+}
+.mc-mt-sel-section-lbl{flex:1;}
+.mc-mt-sel-section-n{
+  opacity:0.7;
+  font-weight:700;
+  font-variant-numeric:tabular-nums;
+}
+
+/* ── HIGH-IMPACT NAME HIGHLIGHT ──
+   When a player's impact% is ≥75% (top 25% of their team's salary list,
+   the script's "Strong" tier ceiling) the name gets a small left-edge
+   accent bar with a soft tinted glow — like a margin marker or quote
+   indicator. Soft red for OUTs (a real loss), soft green for INs (a
+   real return). Subtle by design — the bar fill at the leading edge
+   already carries the colour signal; this is just a visual reinforcement
+   for the eye to catch the genuinely important changes. */
+.mc-mt-sel-row-key{
+  position:relative;
+}
+.mc-mt-sel-row-key::before{
+  content:'';
+  position:absolute;
+  left:-8px;
+  top:50%;
+  transform:translateY(-50%);
+  width:2px;
+  height:60%;
+  border-radius:1px;
+}
+.mc-mt-sel-outs .mc-mt-sel-row-key::before{
+  background:var(--red);
+  box-shadow:
+    0 0 4px rgba(248,113,113,0.7),
+    0 0 9px rgba(248,113,113,0.35);
+}
+.mc-mt-sel-ins .mc-mt-sel-row-key::before{
+  background:var(--green);
+  box-shadow:
+    0 0 4px rgba(52,211,153,0.7),
+    0 0 9px rgba(52,211,153,0.35);
+}
+/* The name text gets very faint colour-tinted text-shadow only, no
+   background block — keeps the data clean and readable. */
+.mc-mt-sel-row-key .mc-mt-sel-name{
+  font-weight:800;
+}
+.mc-mt-sel-outs .mc-mt-sel-row-key .mc-mt-sel-name{
+  text-shadow:0 0 8px rgba(248,113,113,0.18);
+}
+.mc-mt-sel-ins .mc-mt-sel-row-key .mc-mt-sel-name{
+  text-shadow:0 0 8px rgba(52,211,153,0.18);
+}
+
+/* Player row — name + bar + percent in a single tight grid */
+.mc-mt-sel-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 80px 28px;
+  gap:6px;
+  align-items:center;
+  padding:1px 0;
+  /* Stagger animation — rows enter sequentially after card render */
+  opacity:0;
+  animation:mc-mt-sel-row-in 0.32s cubic-bezier(0.22,0.61,0.36,1)
+            calc(0.12s + var(--row-i, 0) * 0.05s) forwards;
+}
+@keyframes mc-mt-sel-row-in{
+  from{opacity:0; transform:translateX(-3px);}
+  to  {opacity:1; transform:translateX(0);}
+}
+.mc-mt-sel-name{
+  font-size:0.46rem; font-weight:700;
+  color:var(--text);
+  letter-spacing:0.02em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  min-width:0;
+  line-height:1.4;
+}
+.mc-mt-sel-row-unknown .mc-mt-sel-name{
+  color:var(--text2);
+  font-weight:600;
+}
+.mc-mt-sel-bar-track{
+  position:relative;
+  height:7px;
+  background:linear-gradient(180deg,
+    rgba(255,255,255,0.025),
+    rgba(255,255,255,0.06));
+  border-radius:3px;
+  overflow:hidden;
+  border:1px solid rgba(255,255,255,0.05);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,0.32);
+}
+.mc-mt-sel-bar-fill{
+  position:absolute; top:0; bottom:0; left:0;
+  border-radius:2px;
+  transform-origin:left;
+  animation:mc-mt-sel-bar-grow 0.7s cubic-bezier(0.22,0.61,0.36,1)
+            calc(0.22s + var(--row-i, 0) * 0.05s) both;
+}
+@keyframes mc-mt-sel-bar-grow{
+  from{transform:scaleX(0);}
+  to  {transform:scaleX(1);}
+}
+.mc-mt-sel-bar-nub{
+  position:absolute; top:50%; left:2px;
+  transform:translateY(-50%);
+  width:4px; height:2px;
+  background:var(--text3);
+  border-radius:1px;
+  opacity:0.5;
+}
+.mc-mt-sel-pct{
+  font-size:0.42rem; font-weight:700;
+  color:var(--text2);
+  font-variant-numeric:tabular-nums;
+  letter-spacing:0.02em;
+  text-align:right;
+  font-family:var(--mono);
+  opacity:0.85;
+}
+.mc-mt-sel-pct-unit{
+  font-size:0.78em;
+  font-weight:600;
+  opacity:0.55;
+  margin-left:1px;
+}
+.mc-mt-sel-row-unknown .mc-mt-sel-pct{display:none;}
+
+/* "Same XI as last week" empty-state */
+.mc-mt-sel-empty{
+  font-size:0.46rem; color:var(--text3);
+  letter-spacing:0.04em;
+  font-style:italic;
+  font-weight:500;
+  padding:2px 0;
+  text-align:left;
+}
+
+/* "Team list not yet named" pending-state */
+.mc-mt-sel-pending{
+  display:flex; align-items:flex-start; gap:6px;
+  padding:0;
+}
+.mc-mt-sel-pending-glyph{
+  flex-shrink:0;
+  width:14px; height:14px;
+  display:flex; align-items:center; justify-content:center;
+  border-radius:2px;
+  background:rgba(251,191,36,0.1);
+  border:1px solid rgba(251,191,36,0.32);
+  color:var(--amber);
+  font-size:0.5rem; font-weight:800;
+  margin-top:1px;
+  animation:glyph-breathe 2.8s ease-in-out infinite;
+}
+.mc-mt-sel-pending-txt{
+  font-size:0.46rem; color:var(--amber);
+  letter-spacing:0.04em;
+  font-weight:600;
+  line-height:1.5;
+  text-align:left;
+}
+
+/* Mobile — slightly more compact */
+@media (max-width:520px){
+  .mc-mt-sel{
+    margin-top:32px;
+    gap:7px;
+  }
+  .mc-mt-sel-row{grid-template-columns:minmax(0,1fr) 56px 26px; gap:6px;}
+  .mc-mt-sel-name{font-size:0.44rem;}
+  .mc-mt-sel-pct{font-size:0.4rem;}
+  .mc-mt-sel-section-head{font-size:0.4rem;}
+}
+
+.mc-form-dots{display:inline-flex;align-items:center;gap:4px;padding:2px 0;}
+.mc-form-empty{font-family:var(--mono);font-size:0.58rem;color:var(--text3);letter-spacing:0.05em;}
+.form-dot{width:9px;height:9px;border-radius:50%;display:inline-block;border:1px solid;transition:transform 0.1s;}
 .form-dot:hover{transform:scale(1.4);z-index:3;position:relative;}
-.form-dot.dot-w{background:var(--green);border-color:rgba(52,211,153,0.5);box-shadow:0 0 4px var(--gglow);}
+.form-dot.dot-w{background:var(--green);border-color:rgba(52,211,153,0.5);box-shadow:0 0 5px var(--gglow);}
 .form-dot.dot-l{background:var(--red);border-color:rgba(248,113,113,0.5);}
 .form-dot.dot-d{background:var(--text3);border-color:rgba(255,255,255,0.1);}
 
-.mc-ladder{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:0.5rem;letter-spacing:0.04em;font-weight:600;margin-top:1px;}
+.mc-ladder{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:0.58rem;letter-spacing:0.04em;font-weight:600;margin-top:2px;}
 .mc-ladder-rank{font-weight:800;letter-spacing:0.04em;}
 .mc-ladder-rec{color:var(--text);font-weight:700;}
 .mc-ladder-pct{color:var(--text2);font-weight:600;}
 .mc-ladder-sep{color:var(--text3);font-weight:400;}
 
-.mc-vs{display:flex;flex-direction:column;align-items:center;gap:3px;padding:0 4px;}
+.mc-vs{display:flex;flex-direction:column;align-items:center;gap:3px;padding:46px 4px 0;}
 .mc-vs-text{font-family:var(--mono);font-size:0.54rem;font-weight:700;color:var(--text3);letter-spacing:0.14em;}
-.mc-vs-bar{width:1px;height:28px;background:var(--border2);}
+.mc-vs-bar{width:1px;height:22px;background:var(--border2);}
 
 .mc-tip{padding:10px 12px 12px;display:flex;flex-direction:column;gap:0;}
 .mc-tip-lbl{font-family:var(--mono);font-size:0.5rem;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--text2);margin-bottom:6px;display:flex;align-items:center;gap:5px;}
@@ -2017,6 +2227,142 @@ def sparkline_svg(values, width=180, height=22, stroke="#4f8fff"):
 # ════════════════════════════════════════════════════════════════════════════
 # RENDER: TIPS
 # ════════════════════════════════════════════════════════════════════════════
+def render_team_selections_inline(team_name, opponent_name, selections_data, team_bg,
+                                  match_dt=None):
+    """Renders this team's ins/outs as a compact inline stack — designed
+    to sit directly under the matchup-header team block (logo / abbr /
+    name / form / record / confidence). No chrome, no section header,
+    no count chips: just rows of player name + bar + percentage,
+    grouped IN above, OUT below.
+
+    `match_dt` is the match's Perth-zoned datetime — used in the pending
+    state to display when team lists are expected to be released:
+      • Thursday matches  → Wed 12pm release (the night-before drop)
+      • All other matches → Thu 12pm release (the standard round drop)
+
+    Returns empty string when there are no changes or no data record yet,
+    so the team header stays clean for unnamed/unchanged teams."""
+
+    record = get_selections_for_game(team_name, opponent_name, selections_data)
+    if record is None:
+        # Teams not named yet — show a small amber pending hint with the
+        # expected release time so the punter knows when to come back.
+        # AFL convention: Thursday match team lists drop Wed 12pm AEST/AEDT,
+        # all other rounds' lists drop Thu 12pm.
+        release_msg = "Team list not yet named"
+        if match_dt is not None:
+            try:
+                # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+                if match_dt.weekday() == 3:  # Thursday match
+                    release_msg = "Lists released Wed 12pm"
+                else:
+                    release_msg = "Lists released Thu 12pm"
+            except Exception:
+                pass
+        return _h(f"""
+        <div class="mc-mt-sel mc-mt-sel-pending">
+          <div class="mc-mt-sel-pending-glyph">!</div>
+          <div class="mc-mt-sel-pending-txt">{release_msg}</div>
+        </div>
+        """)
+
+    # get_selections_for_game already swaps the record so 'home' = the
+    # team we passed as the first argument. So 'side' is always our team.
+    side = record["home"]
+
+    ins_list  = side.get("ins")  or []
+    outs_list = side.get("outs") or []
+
+    if not ins_list and not outs_list:
+        # No changes for this team — quiet single-line note
+        return _h(f"""
+        <div class="mc-mt-sel mc-mt-sel-empty">
+          Same XI as last week
+        </div>
+        """)
+
+    # Sort each list by impact% desc — biggest blow / biggest return at top
+    def _sort_by_impact(players):
+        return sorted(players,
+                      key=lambda p: (-(p.get("fill") if p.get("fill") is not None else -1)))
+    ins_list  = _sort_by_impact(ins_list)
+    outs_list = _sort_by_impact(outs_list)
+
+    def _row(player, kind, row_index):
+        fill = player.get("fill")
+        name = player.get("name") or "—"
+        # Track row-level CSS classes so we can style the name with a
+        # subtle red/green halo when the player is genuinely important
+        # to their team (≥75% impact = top 25% of their team's salary list,
+        # i.e. the script's "Strong" tier ceiling and above).
+        extra_cls = ""
+        if fill is None:
+            # Unranked — render a faint placeholder bar with no percent label
+            bar_inner = '<div class="mc-mt-sel-bar-nub"></div>'
+            pct_label = ''
+            extra_cls = " mc-mt-sel-row-unknown"
+        else:
+            pct = max(0.0, min(1.0, fill)) * 100
+            if kind == "in":
+                grad = (f"linear-gradient(90deg,"
+                        f"  {_rgba_with_alpha(team_bg, 0.3)} 0%,"
+                        f"  {_rgba_with_alpha(team_bg, 0.85)} 70%,"
+                        f"  rgba(52,211,153,0.95) 100%)")
+                glow = "rgba(52,211,153,0.28)"
+            else:
+                grad = (f"linear-gradient(90deg,"
+                        f"  {_rgba_with_alpha(team_bg, 0.3)} 0%,"
+                        f"  {_rgba_with_alpha(team_bg, 0.85)} 70%,"
+                        f"  rgba(248,113,113,0.95) 100%)")
+                glow = "rgba(248,113,113,0.28)"
+            bar_inner = (f'<div class="mc-mt-sel-bar-fill" '
+                         f'style="width:{pct:.1f}%;background:{grad};box-shadow:0 0 7px {glow};"></div>')
+            pct_label = (f'<span class="mc-mt-sel-pct">{pct:.0f}'
+                         f'<span class="mc-mt-sel-pct-unit">%</span></span>')
+            # ≥75% = key player — add the highlight class for the name
+            if fill >= 0.75:
+                extra_cls = " mc-mt-sel-row-key"
+
+        return (f'<div class="mc-mt-sel-row{extra_cls}" style="--row-i:{row_index};">'
+                f'<span class="mc-mt-sel-name">{name}</span>'
+                f'<span class="mc-mt-sel-bar-track">{bar_inner}</span>'
+                f'{pct_label}'
+                f'</div>')
+
+    # Build each section if there are entries. We render every change —
+    # no truncation, no '+N more' summary — so the punter sees the full
+    # picture for both teams. The list is already sorted by impact% desc,
+    # so the most consequential changes lead each column.
+    sections_html = ""
+    if ins_list:
+        rows = "".join(_row(p, "in", i) for i, p in enumerate(ins_list))
+        sections_html += (f'<div class="mc-mt-sel-section mc-mt-sel-ins">'
+                          f'<div class="mc-mt-sel-section-head">'
+                          f'<span class="mc-mt-sel-section-glyph">▲</span>'
+                          f'<span class="mc-mt-sel-section-lbl">In</span>'
+                          f'<span class="mc-mt-sel-section-n">{len(ins_list)}</span>'
+                          f'</div>'
+                          f'{rows}'
+                          f'</div>')
+    if outs_list:
+        offset = len(ins_list)
+        rows = "".join(_row(p, "out", offset + i) for i, p in enumerate(outs_list))
+        sections_html += (f'<div class="mc-mt-sel-section mc-mt-sel-outs">'
+                          f'<div class="mc-mt-sel-section-head">'
+                          f'<span class="mc-mt-sel-section-glyph">▼</span>'
+                          f'<span class="mc-mt-sel-section-lbl">Out</span>'
+                          f'<span class="mc-mt-sel-section-n">{len(outs_list)}</span>'
+                          f'</div>'
+                          f'{rows}'
+                          f'</div>')
+
+    return _h(f"""
+    <div class="mc-mt-sel" style="--team-accent:{team_bg};">
+      {sections_html}
+    </div>
+    """)
+
+
 def render_team_selections_block(home, away, selections_data,
                                  home_bg, away_bg):
     """Renders the ins/outs panel as a collapsible disclosure.
@@ -2799,6 +3145,7 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
               {home_form_html}
               {home_ladder_html}
               <div class="mc-mt-prob" style="color:{h_prob_color};border-color:{h_border};">{home_pct_label}</div>
+              {render_team_selections_inline(home, away, selections_data, home_bg, dp)}
             </div>
             <div class="mc-vs">
               <div class="mc-vs-bar"></div>
@@ -2812,9 +3159,9 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
               {away_form_html}
               {away_ladder_html}
               <div class="mc-mt-prob" style="color:{a_prob_color};border-color:{a_border};">{away_pct_label}</div>
+              {render_team_selections_inline(away, home, selections_data, away_bg, dp)}
             </div>
           </div>
-          {render_team_selections_block(home, away, selections_data, home_bg, away_bg)}
           <div class="mc-tip">
             <div class="mc-tip-lbl">Our Prediction</div>
             <div class="mc-tip-chip-row">
@@ -7726,3 +8073,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

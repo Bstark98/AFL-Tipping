@@ -119,6 +119,82 @@ TEAM_NAME_ALIASES = {
     "Bulldogs": "Western Bulldogs",
 }
 
+# ── H2H FEATURE — name & stat mappings ──
+# The footywire team-rankings page keys teams by nickname ("Crows", "Lions"),
+# while the Squiggle H2H endpoint uses different long names ("Adelaide",
+# "Brisbane Lions"). Both maps are keyed off the app's canonical name so we
+# only ever need one lookup function from the existing canonical() helper.
+
+# Canonical app name → footywire rankings-page nickname
+H2H_RANKINGS_NICKNAME = {
+    "Adelaide": "Crows",
+    "Brisbane Lions": "Lions",
+    "Carlton": "Blues",
+    "Collingwood": "Magpies",
+    "Essendon": "Bombers",
+    "Fremantle": "Dockers",
+    "Geelong": "Cats",
+    "Gold Coast": "Suns",
+    "GWS Giants": "Giants",
+    "Hawthorn": "Hawks",
+    "Melbourne": "Demons",
+    "North Melbourne": "Kangaroos",
+    "Port Adelaide": "Power",
+    "Richmond": "Tigers",
+    "St Kilda": "Saints",
+    "Sydney": "Swans",
+    "West Coast": "Eagles",
+    "Western Bulldogs": "Bulldogs",
+}
+
+# Canonical app name → Squiggle API team name (for H2H game filtering)
+H2H_SQUIGGLE_NAME = {
+    "Adelaide": "Adelaide",
+    "Brisbane Lions": "Brisbane Lions",
+    "Carlton": "Carlton",
+    "Collingwood": "Collingwood",
+    "Essendon": "Essendon",
+    "Fremantle": "Fremantle",
+    "Geelong": "Geelong",
+    "Gold Coast": "Gold Coast",
+    "GWS Giants": "Greater Western Sydney",
+    "Hawthorn": "Hawthorn",
+    "Melbourne": "Melbourne",
+    "North Melbourne": "North Melbourne",
+    "Port Adelaide": "Port Adelaide",
+    "Richmond": "Richmond",
+    "St Kilda": "St Kilda",
+    "Sydney": "Sydney",
+    "West Coast": "West Coast",
+    "Western Bulldogs": "Western Bulldogs",
+}
+
+# Reverse map — Squiggle team name → canonical app name (for displaying
+# winners from H2H game payloads). Built from H2H_SQUIGGLE_NAME so the two
+# can never drift apart.
+H2H_SQUIGGLE_TO_CANONICAL = {v: k for k, v in H2H_SQUIGGLE_NAME.items()}
+
+# Stat codes pulled from the rankings page — each maps a column header to
+# a friendly label for the tornado chart. Order here is the row order on
+# the chart (most-readable first: ball use, then scoring, then defence).
+H2H_TORNADO_STATS = [
+    ("D",   "Disposals"),
+    ("M",   "Marks"),
+    ("G",   "Goals"),
+    ("T",   "Tackles"),
+    ("I50", "Inside 50s"),
+    ("CL",  "Clearances"),
+    ("R50", "Rebound 50s"),
+    ("HO",  "Hitouts"),
+]
+
+# How many recent meetings to show in the strip (5 ≈ 2-3 seasons of meetings
+# for most pairs — enough to tell a story without overwhelming the card)
+H2H_N_LAST_MEETINGS = 5
+# How far back to search for those meetings — 5 years strikes the right
+# balance between completeness and Squiggle load time
+H2H_LOOKBACK_YEARS = 5
+
 def canonical(name):
     return TEAM_NAME_ALIASES.get(str(name).strip(), str(name).strip())
 
@@ -1247,6 +1323,537 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 ::-webkit-scrollbar-thumb{background:var(--border3);border-radius:2px;}
 div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 .stAlert{background:var(--card)!important;border:1px solid var(--border2)!important;border-radius:8px!important;margin:12px 14px!important;font-family:var(--mono)!important;font-size:0.65rem!important;color:var(--text2)!important;}
+
+/* ════════════════════════════════════════════════════════════════════════
+   H2H DISCLOSURE — Last 5 Meets + Form Tornado, scoped to the match card.
+   Design philosophy: minimalist dropdown row that reads as a control, not
+   a chunk of content. Expanded body has two sections separated by a thin
+   divider — meetings on top, tornado below. Both sections inherit the
+   match card's background so the disclosure feels attached, not bolted on.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.mc-h2h-disclosure{
+  margin:6px 14px 4px;
+  border:1px solid var(--border);
+  background:transparent;
+  border-radius:6px;
+  font-family:var(--mono);
+  position:relative;
+  transition:border-color 0.22s ease, background 0.22s ease;
+}
+.mc-h2h-disclosure:hover{
+  border-color:rgba(167,139,250,0.22);
+}
+.mc-h2h-disclosure[open]{
+  border-color:rgba(167,139,250,0.34);
+  background:linear-gradient(180deg,
+    color-mix(in srgb, var(--bg2) 55%, transparent),
+    var(--bg2));
+}
+.mc-h2h-disclosure > summary{list-style:none;}
+.mc-h2h-disclosure > summary::-webkit-details-marker{display:none;}
+.mc-h2h-disclosure > summary::marker{display:none; content:'';}
+
+/* ── SUMMARY ROW — DELIBERATELY MINIMAL ──
+   The whole point of this redesign: the closed state is a single thin
+   line. Just "Head to Head Analysis" on the left, a faint chevron on the right.
+   No icon, no record pill, no status text, no CTA chip. The reveal on
+   click is where everything lives. */
+.mc-h2h-summary{
+  display:flex; align-items:center;
+  justify-content:space-between;
+  padding:9px 12px;
+  cursor:pointer;
+  user-select:none;
+  -webkit-tap-highlight-color:transparent;
+  transition:padding 0.22s ease;
+  position:relative;
+  min-height:36px;
+}
+.mc-h2h-summary:focus-visible{
+  outline:1px solid var(--accent2);
+  outline-offset:-2px;
+  border-radius:5px;
+}
+
+.mc-h2h-sum-title{
+  font-size:0.54rem; font-weight:700;
+  letter-spacing:0.18em; text-transform:uppercase;
+  color:var(--text2);
+  line-height:1;
+  transition:color 0.22s ease;
+}
+.mc-h2h-disclosure:hover .mc-h2h-sum-title,
+.mc-h2h-disclosure[open] .mc-h2h-sum-title{
+  color:var(--white);
+}
+
+.mc-h2h-sum-chevron{
+  font-size:0.78rem;
+  font-weight:300;
+  color:var(--text3);
+  line-height:1;
+  display:inline-block;
+  transform:rotate(0deg);
+  transition:transform 0.28s ease, color 0.22s ease;
+  opacity:0.7;
+}
+.mc-h2h-disclosure:hover .mc-h2h-sum-chevron{
+  color:var(--accent2);
+  opacity:1;
+}
+.mc-h2h-disclosure[open] .mc-h2h-sum-chevron{
+  transform:rotate(90deg);
+  color:var(--accent2);
+  opacity:1;
+}
+
+/* ── BODY — appears below the summary when [open] ── */
+.mc-h2h-body{
+  padding:0;
+  background:transparent;
+  border-top:1px solid rgba(167,139,250,0.18);
+  animation:h2h-fade-in 0.32s ease both;
+}
+@keyframes h2h-fade-in{
+  from{opacity:0; transform:translateY(-3px);}
+  to{opacity:1; transform:translateY(0);}
+}
+
+/* ── RECORD BANNER ──
+   The first thing the user sees on expand — huge team-coloured wins
+   numbers either side of a centred meeting-count label. This is where
+   the W-L pill that USED to live in the closed summary now lives, with
+   way more breathing room and presence. */
+.mc-h2h-recb{
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+  align-items:center;
+  gap:12px;
+  padding:16px 14px 14px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,
+    rgba(167,139,250,0.04),
+    transparent 70%);
+}
+.mc-h2h-recb-side{
+  display:flex; align-items:center;
+  gap:10px;
+}
+.mc-h2h-recb-side-h{justify-content:flex-end;}
+.mc-h2h-recb-side-a{justify-content:flex-start;}
+
+.mc-h2h-recb-team{
+  font-size:0.62rem; font-weight:800;
+  letter-spacing:0.14em;
+  color:var(--team-accent);
+  text-shadow:0 0 10px color-mix(in srgb, var(--team-accent) 50%, transparent);
+  text-transform:uppercase;
+}
+.mc-h2h-recb-num{
+  font-size:1.7rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  color:var(--white);
+  line-height:1;
+  letter-spacing:-0.03em;
+  text-shadow:0 0 14px color-mix(in srgb, var(--team-accent) 35%, transparent);
+}
+
+.mc-h2h-recb-mid{
+  display:flex; flex-direction:column;
+  align-items:center;
+  gap:4px;
+  padding:0 6px;
+  position:relative;
+}
+.mc-h2h-recb-mid::before,
+.mc-h2h-recb-mid::after{
+  content:'';
+  position:absolute;
+  top:50%;
+  width:14px;
+  height:1px;
+  background:linear-gradient(90deg, var(--border3), transparent);
+}
+.mc-h2h-recb-mid::before{
+  right:100%;
+  background:linear-gradient(90deg, transparent, var(--border3));
+}
+.mc-h2h-recb-mid::after{
+  left:100%;
+}
+.mc-h2h-recb-lbl{
+  font-size:0.46rem; font-weight:700;
+  letter-spacing:0.16em; text-transform:uppercase;
+  color:var(--text2);
+  white-space:nowrap;
+  text-align:center;
+}
+.mc-h2h-recb-draws{
+  font-size:0.42rem; font-weight:700;
+  letter-spacing:0.1em; text-transform:uppercase;
+  color:var(--amber);
+  padding:2px 7px;
+  border-radius:3px;
+  background:rgba(251,191,36,0.08);
+  border:1px solid rgba(251,191,36,0.22);
+  white-space:nowrap;
+}
+
+/* Each section (Meetings, Tornado) shares the same shell */
+.mc-h2h-section{
+  padding:14px 14px 16px;
+  border-bottom:1px solid var(--border);
+}
+.mc-h2h-section:last-child{border-bottom:none;}
+
+.mc-h2h-section-head{
+  display:flex; align-items:baseline;
+  gap:8px;
+  margin-bottom:11px;
+}
+.mc-h2h-section-glyph{
+  color:var(--accent2);
+  font-size:0.68rem;
+  line-height:1;
+}
+.mc-h2h-section-lbl{
+  font-size:0.56rem; font-weight:800;
+  letter-spacing:0.14em; text-transform:uppercase;
+  color:var(--white);
+}
+.mc-h2h-section-sub{
+  font-size:0.46rem; font-weight:500;
+  letter-spacing:0.06em;
+  color:var(--text3);
+  margin-left:auto;
+  text-transform:uppercase;
+  font-style:italic;
+}
+
+/* ── LAST-5 MEETINGS STRIP ──
+   Horizontally scrolling row of compact cards, newest on the left.
+   Each card has a coloured top edge in the winner's accent, logos for
+   both clubs side-by-side, scores, and a date label. The losing side
+   is dimmed so the result reads at a glance. */
+.mc-h2h-meets{
+  display:flex;
+  gap:8px;
+  overflow-x:auto;
+  scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;
+  padding-bottom:2px;
+  scroll-snap-type:x mandatory;
+}
+.mc-h2h-meets::-webkit-scrollbar{display:none;}
+
+.mc-h2h-meet{
+  flex:0 0 auto;
+  display:flex; flex-direction:column;
+  align-items:center;
+  gap:6px;
+  padding:8px 10px 9px;
+  background:linear-gradient(180deg,
+    color-mix(in srgb, var(--meet-accent) 6%, var(--card)) 0%,
+    var(--card) 100%);
+  border:1px solid color-mix(in srgb, var(--meet-accent) 18%, var(--border2));
+  border-top:2px solid var(--meet-accent);
+  border-radius:5px;
+  min-width:108px;
+  scroll-snap-align:start;
+  position:relative;
+  box-shadow:0 0 0 0 transparent;
+  transition:box-shadow 0.2s ease, transform 0.15s ease;
+}
+.mc-h2h-meet:hover{
+  box-shadow:0 0 14px color-mix(in srgb, var(--meet-accent) 22%, transparent);
+  transform:translateY(-1px);
+}
+
+.mc-h2h-meet-date{
+  font-size:0.46rem; font-weight:700;
+  letter-spacing:0.14em;
+  color:var(--text3);
+  text-transform:uppercase;
+}
+
+.mc-h2h-meet-row{
+  display:flex; align-items:center;
+  gap:6px;
+  width:100%;
+  justify-content:space-between;
+}
+.mc-h2h-meet-side{
+  display:flex; align-items:center;
+  gap:5px;
+  flex:1;
+  min-width:0;
+}
+.mc-h2h-meet-side:last-child{
+  justify-content:flex-end;
+}
+
+.mc-h2h-meet-logo{
+  width:22px; height:22px;
+  object-fit:contain;
+  flex-shrink:0;
+  filter:drop-shadow(0 0 4px rgba(255,255,255,0.1));
+  transition:filter 0.2s ease, opacity 0.2s ease;
+}
+.mc-h2h-meet-logo-fallback{
+  width:22px; height:22px;
+  display:flex; align-items:center; justify-content:center;
+  background:rgba(255,255,255,0.05);
+  border:1px solid var(--border2);
+  border-radius:3px;
+  font-size:0.46rem; font-weight:800;
+  letter-spacing:0.06em;
+  color:var(--text2);
+  flex-shrink:0;
+}
+.mc-h2h-meet-logo-dim{
+  opacity:0.36;
+  filter:grayscale(0.6) drop-shadow(0 0 0 transparent);
+}
+
+.mc-h2h-meet-score{
+  font-size:0.78rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  color:var(--white);
+  line-height:1;
+  letter-spacing:-0.02em;
+}
+.mc-h2h-meet-score-dim{
+  color:var(--text3);
+  opacity:0.55;
+  font-weight:600;
+}
+
+.mc-h2h-meet-vs{
+  font-size:0.6rem;
+  color:var(--text3);
+  opacity:0.5;
+  flex-shrink:0;
+}
+
+.mc-h2h-meet-venue{
+  font-size:0.42rem; font-weight:600;
+  letter-spacing:0.06em;
+  color:var(--text3);
+  text-transform:uppercase;
+  max-width:100%;
+  overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap;
+  opacity:0.7;
+}
+
+.mc-h2h-meets-empty{
+  display:flex; align-items:center;
+  gap:8px;
+  padding:14px 12px;
+  background:var(--card);
+  border:1px dashed var(--border2);
+  border-radius:5px;
+  font-size:0.54rem; font-weight:500;
+  color:var(--text3);
+  font-style:italic;
+  letter-spacing:0.04em;
+}
+.mc-h2h-empty-glyph{
+  color:var(--text3);
+  font-size:0.7rem;
+  opacity:0.5;
+}
+
+/* ── TORNADO CHART ──
+   Two halves around a central stat label. Each half's bar is in the
+   team's primary colour, anchored to the centre and growing outward.
+   Values flank the bars on each side. The leader of each row gets the
+   bright value, the trailer fades. */
+.mc-h2h-tor{
+  background:var(--card);
+  border:1px solid var(--border2);
+  border-radius:6px;
+  overflow:hidden;
+}
+
+.mc-h2h-tor-header{
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+  align-items:center;
+  gap:10px;
+  padding:9px 12px;
+  background:linear-gradient(180deg,var(--bg2),var(--card));
+  border-bottom:1px solid var(--border);
+}
+.mc-h2h-tor-team{
+  display:flex; align-items:center;
+  gap:7px;
+  min-width:0;
+}
+.mc-h2h-tor-team-h{justify-content:flex-start;}
+.mc-h2h-tor-team-a{justify-content:flex-end;}
+.mc-h2h-tor-logo{
+  width:24px; height:24px;
+  object-fit:contain;
+  filter:drop-shadow(0 0 6px rgba(255,255,255,0.12));
+}
+.mc-h2h-tor-team-abbr{
+  font-size:0.7rem; font-weight:800;
+  letter-spacing:0.12em;
+  color:var(--team-accent);
+  text-shadow:0 0 8px color-mix(in srgb, var(--team-accent) 50%, transparent);
+}
+.mc-h2h-tor-divider{
+  width:1px;
+  height:22px;
+  background:linear-gradient(180deg,
+    transparent,
+    var(--border3),
+    transparent);
+  flex-shrink:0;
+}
+
+.mc-h2h-tor-rows{
+  display:flex; flex-direction:column;
+}
+
+/* Each row: home value | bars + centred stat label | away value */
+.mc-h2h-tor-row{
+  display:grid;
+  grid-template-columns:38px 1fr 38px;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+  border-top:1px solid var(--border);
+}
+.mc-h2h-tor-row:first-child{border-top:none;}
+
+.mc-h2h-tor-val{
+  font-size:0.62rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:-0.01em;
+  line-height:1;
+}
+.mc-h2h-tor-val-h{text-align:right;}
+.mc-h2h-tor-val-a{text-align:left;}
+.mc-h2h-tor-val-win{
+  color:var(--white);
+  text-shadow:0 0 6px rgba(255,255,255,0.18);
+}
+.mc-h2h-tor-val-lose{
+  color:var(--text3);
+  opacity:0.55;
+  font-weight:600;
+}
+.mc-h2h-tor-val-tie{
+  color:var(--accent3);
+  opacity:0.85;
+}
+
+/* Bar-pair container — split at the centre, with the stat label sitting
+   over the dividing line. The two bars grow outward from the centre. */
+.mc-h2h-tor-bars{
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+  align-items:center;
+  gap:6px;
+  position:relative;
+  min-height:18px;
+}
+.mc-h2h-tor-bar-h,
+.mc-h2h-tor-bar-a{
+  height:10px;
+  border-radius:2px;
+  position:relative;
+  overflow:hidden;
+}
+/* Home bar grows right-to-left (anchored to centre) — width is bar-pct */
+.mc-h2h-tor-bar-h{
+  justify-self:end;
+  width:var(--bar-pct,0%);
+  background:linear-gradient(270deg,
+    var(--bar-color) 0%,
+    color-mix(in srgb, var(--bar-color) 70%, transparent) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 0 8px color-mix(in srgb, var(--bar-color) 35%, transparent);
+}
+/* Away bar grows left-to-right */
+.mc-h2h-tor-bar-a{
+  justify-self:start;
+  width:var(--bar-pct,0%);
+  background:linear-gradient(90deg,
+    var(--bar-color) 0%,
+    color-mix(in srgb, var(--bar-color) 70%, transparent) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 0 8px color-mix(in srgb, var(--bar-color) 35%, transparent);
+}
+/* Stat label sits centred between the bars */
+.mc-h2h-tor-lbl{
+  font-size:0.46rem; font-weight:700;
+  letter-spacing:0.1em;
+  color:var(--text2);
+  text-transform:uppercase;
+  white-space:nowrap;
+  padding:0 2px;
+  text-align:center;
+  min-width:62px;
+}
+.mc-h2h-tor-row-empty .mc-h2h-tor-val{color:var(--text3); opacity:0.4;}
+
+/* ── MOBILE TWEAKS ──
+   Closed summary is already minimal — just tighten margins. Inside the
+   body, shrink the tornado columns and the record banner numbers so
+   everything fits comfortably on a phone-width card. */
+@media (max-width:480px){
+  .mc-h2h-disclosure{margin:5px 10px 3px;}
+  .mc-h2h-summary{
+    padding:8px 11px;
+    min-height:34px;
+  }
+  .mc-h2h-sum-title{font-size:0.5rem; letter-spacing:0.16em;}
+  .mc-h2h-sum-chevron{font-size:0.72rem;}
+
+  .mc-h2h-recb{
+    padding:13px 10px 12px;
+    gap:8px;
+  }
+  .mc-h2h-recb-num{font-size:1.4rem;}
+  .mc-h2h-recb-team{font-size:0.56rem; letter-spacing:0.1em;}
+  .mc-h2h-recb-side{gap:7px;}
+  .mc-h2h-recb-mid::before,.mc-h2h-recb-mid::after{width:10px;}
+  .mc-h2h-recb-lbl{font-size:0.42rem; letter-spacing:0.12em;}
+
+  .mc-h2h-section{padding:12px 10px 13px;}
+  .mc-h2h-section-sub{display:none;}
+  .mc-h2h-meet{min-width:96px; padding:7px 8px;}
+  .mc-h2h-meet-logo,.mc-h2h-meet-logo-fallback{width:20px; height:20px;}
+  .mc-h2h-meet-score{font-size:0.7rem;}
+  .mc-h2h-tor-row{
+    grid-template-columns:32px 1fr 32px;
+    padding:5px 8px;
+    gap:5px;
+  }
+  .mc-h2h-tor-val{font-size:0.58rem;}
+  .mc-h2h-tor-lbl{
+    font-size:0.42rem;
+    min-width:50px;
+    letter-spacing:0.06em;
+  }
+  .mc-h2h-tor-bar-h,.mc-h2h-tor-bar-a{height:9px;}
+  .mc-h2h-tor-header{padding:8px 10px;}
+  .mc-h2h-tor-team-abbr{font-size:0.62rem;}
+  .mc-h2h-tor-logo{width:20px; height:20px;}
+}
+
+/* Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce){
+  .mc-h2h-body{animation:none;}
+  .mc-h2h-sum-chevron{transition:none;}
+  .mc-h2h-meet:hover{transform:none;}
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2861,6 +3468,467 @@ def _rgba_with_alpha(hex_or_rgb, alpha):
     return f"rgba(79,143,255,{alpha})"
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# H2H FEATURE — Tornado (footywire season averages) + Last 5 Meets (Squiggle)
+# ════════════════════════════════════════════════════════════════════════════
+# Lifted and adapted from the standalone AFL_Head_2_Head terminal script.
+# Two data sources:
+#   1) footywire ft_team_rankings page — season-average team stats (for tornado)
+#   2) Squiggle /?q=games;year=YYYY    — completed games (for H2H meeting strip)
+# Both are cached at the Streamlit layer so a single round-render hits each
+# upstream at most once. All errors are swallowed and the block silently
+# hides itself — never breaks the surrounding card.
+
+# URLs are local constants — keeps the H2H feature self-contained
+_H2H_RANKINGS_URL = "https://www.footywire.com/afl/footy/ft_team_rankings?type=TA"
+
+@st.cache_data(ttl=21600, show_spinner=False)  # 6h TTL — rankings move slowly
+def fetch_h2h_rankings():
+    """Scrape footywire's team-averages rankings page and return a dict
+    keyed by canonical app team name → {stat_code: float, ...}.
+    Returns ({}, status) on any failure so the caller can decide what to do.
+    Status is one of: 'ok', 'missing-deps', 'scrape-failed', 'empty'."""
+    try:
+        from bs4 import BeautifulSoup as _BS
+    except ImportError:
+        return ({}, "missing-deps")
+
+    html = _fw_fetch(_H2H_RANKINGS_URL)
+    if not html:
+        return ({}, "scrape-failed")
+
+    try:
+        soup = _BS(html, "html.parser")
+    except Exception:
+        return ({}, "scrape-failed")
+
+    # The rankings table is the only one whose text starts with "Rk Team"
+    target_table = None
+    for table in soup.find_all("table"):
+        header_preview = table.get_text(" ", strip=True)[:60]
+        if header_preview.startswith("Rk Team"):
+            target_table = table
+            break
+    if target_table is None:
+        return ({}, "scrape-failed")
+
+    rows = target_table.find_all("tr")
+    if not rows:
+        return ({}, "scrape-failed")
+
+    # First row = header — extract column names
+    header_cells = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
+    header_cells = [h for h in header_cells if h]
+
+    # Build {nickname → {stat → val}} from the table body
+    by_nickname = {}
+    for row in rows[1:]:
+        if row.find("a") is None:
+            continue
+        cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
+        if not cells or not cells[0].isdigit():
+            continue
+        if len(cells) > len(header_cells):
+            cells = cells[:len(header_cells)]
+        elif len(cells) < len(header_cells):
+            cells = cells + [""] * (len(header_cells) - len(cells))
+
+        # Build a {colname: value} dict for this row
+        record = dict(zip(header_cells, cells))
+        team_nickname = record.get("Team", "").strip()
+        if not team_nickname:
+            continue
+        # Convert stat columns to floats; drop rank/team
+        stats = {}
+        for k, v in record.items():
+            if k in ("Rk", "Team"):
+                continue
+            try:
+                stats[k] = float(v)
+            except (ValueError, TypeError):
+                stats[k] = None
+        by_nickname[team_nickname] = stats
+
+    # Re-key by canonical app name so callers don't need to know about footywire's
+    # nickname format. Teams whose nickname isn't in our map are silently skipped.
+    by_canonical = {}
+    for canonical_name, nickname in H2H_RANKINGS_NICKNAME.items():
+        if nickname in by_nickname:
+            by_canonical[canonical_name] = by_nickname[nickname]
+
+    if not by_canonical:
+        return ({}, "empty")
+    return (by_canonical, "ok")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)  # 1h TTL — H2H games rarely change mid-week
+def fetch_h2h_games_for_year(year):
+    """Pull all completed games for one year from Squiggle. Returns a list
+    of game dicts (possibly empty). Reuses the existing app SESSION via the
+    fetch() helper — same headers, same connection pool, same retry logic."""
+    try:
+        return fetch(f"q=games;year={year};complete=100").get("games", [])
+    except Exception:
+        return []
+
+
+def fetch_h2h_game_pool():
+    """Wrapper that fetches the multi-year pool of completed games we'll
+    filter for H2H meetings. Each year is cached individually so a refresh
+    of one year doesn't invalidate the others."""
+    current_year = datetime.now().year
+    years = list(range(current_year - H2H_LOOKBACK_YEARS + 1, current_year + 1))
+    pool = []
+    for y in years:
+        pool.extend(fetch_h2h_games_for_year(y))
+    return pool
+
+
+def build_h2h_meetings(home_canonical, away_canonical, game_pool):
+    """Filter the shared game pool to completed meetings between these two
+    teams, sort newest-first, and cap at H2H_N_LAST_MEETINGS. Returns a
+    list of game dicts (each one as Squiggle returns it, plus a parsed
+    'date_obj' datetime for sorting)."""
+    home_sq = H2H_SQUIGGLE_NAME.get(home_canonical)
+    away_sq = H2H_SQUIGGLE_NAME.get(away_canonical)
+    if not home_sq or not away_sq:
+        return []
+
+    matching = []
+    for g in game_pool:
+        # Skip in-progress / future games (no winner yet)
+        if g.get("complete") != 100:
+            continue
+        teams_on_card = {g.get("hteam"), g.get("ateam")}
+        if home_sq in teams_on_card and away_sq in teams_on_card:
+            # Parse the date once, attach it for sorting & display
+            date_obj = None
+            date_str = g.get("date", "")
+            if date_str:
+                try:
+                    # Squiggle dates: "2024-09-28 14:30:00"
+                    date_obj = datetime.strptime(date_str[:10], "%Y-%m-%d")
+                except ValueError:
+                    date_obj = None
+            enriched = dict(g)
+            enriched["_date_obj"] = date_obj
+            matching.append(enriched)
+
+    # Newest-first
+    matching.sort(key=lambda g: g.get("_date_obj") or datetime.min, reverse=True)
+    return matching[:H2H_N_LAST_MEETINGS]
+
+
+def _h2h_meeting_card_html(meeting, home_canonical, away_canonical):
+    """Render one meeting in the Last-5 strip — winner logo on top, score
+    underneath, date below. Loser side is dimmed. Draws show both equally."""
+    h_score = meeting.get("hscore", 0) or 0
+    a_score = meeting.get("ascore", 0) or 0
+    h_team_squiggle = meeting.get("hteam", "")
+    a_team_squiggle = meeting.get("ateam", "")
+    # Map back to canonical names for logo/colour lookup
+    h_team_canon = H2H_SQUIGGLE_TO_CANONICAL.get(h_team_squiggle, h_team_squiggle)
+    a_team_canon = H2H_SQUIGGLE_TO_CANONICAL.get(a_team_squiggle, a_team_squiggle)
+
+    margin = h_score - a_score
+    if margin == 0:
+        winner_canon = None  # draw
+    elif margin > 0:
+        winner_canon = h_team_canon
+    else:
+        winner_canon = a_team_canon
+
+    # Year display (compact — round numbers vary by season layout)
+    date_obj = meeting.get("_date_obj")
+    if date_obj:
+        date_lbl = date_obj.strftime("%b %Y").upper()
+    else:
+        date_lbl = ""
+
+    # The team we're "viewing from" is the home team passed in (from the
+    # card's perspective). Highlight which one is which side using a tiny
+    # left/right indicator above the logos.
+    home_logo = TEAM_LOGOS.get(h_team_canon, "")
+    away_logo = TEAM_LOGOS.get(a_team_canon, "")
+    home_abbr = TEAM_ABBR.get(h_team_canon, h_team_squiggle[:3].upper())
+    away_abbr = TEAM_ABBR.get(a_team_canon, a_team_squiggle[:3].upper())
+
+    # Winner colour — used as a subtle left-edge accent on the card
+    if winner_canon:
+        winner_accent = team_accent(winner_canon)
+    else:
+        winner_accent = "#888"
+
+    # Dim the losing side's score for clarity
+    h_score_dim = "" if (winner_canon == h_team_canon or winner_canon is None) else "mc-h2h-meet-score-dim"
+    a_score_dim = "" if (winner_canon == a_team_canon or winner_canon is None) else "mc-h2h-meet-score-dim"
+    h_logo_dim  = "" if (winner_canon == h_team_canon or winner_canon is None) else "mc-h2h-meet-logo-dim"
+    a_logo_dim  = "" if (winner_canon == a_team_canon or winner_canon is None) else "mc-h2h-meet-logo-dim"
+
+    home_logo_html = f'<img src="{home_logo}" class="mc-h2h-meet-logo {h_logo_dim}" />' if home_logo else f'<div class="mc-h2h-meet-logo-fallback {h_logo_dim}">{home_abbr}</div>'
+    away_logo_html = f'<img src="{away_logo}" class="mc-h2h-meet-logo {a_logo_dim}" />' if away_logo else f'<div class="mc-h2h-meet-logo-fallback {a_logo_dim}">{away_abbr}</div>'
+
+    venue = (meeting.get("venue") or "").strip()
+    venue_html = f'<div class="mc-h2h-meet-venue">{venue}</div>' if venue else ''
+
+    return (
+        f'<div class="mc-h2h-meet" style="--meet-accent:{winner_accent};">'
+        f'  <div class="mc-h2h-meet-date">{date_lbl}</div>'
+        f'  <div class="mc-h2h-meet-row">'
+        f'    <div class="mc-h2h-meet-side">'
+        f'      {home_logo_html}'
+        f'      <div class="mc-h2h-meet-score {h_score_dim}">{int(h_score)}</div>'
+        f'    </div>'
+        f'    <div class="mc-h2h-meet-vs">·</div>'
+        f'    <div class="mc-h2h-meet-side">'
+        f'      <div class="mc-h2h-meet-score {a_score_dim}">{int(a_score)}</div>'
+        f'      {away_logo_html}'
+        f'    </div>'
+        f'  </div>'
+        f'  {venue_html}'
+        f'</div>'
+    )
+
+
+def _h2h_tornado_row_html(stat_code, stat_label, home_val, away_val,
+                          home_canonical, away_canonical):
+    """Render one tornado row — stat label centred, home bar pushing right-to-left,
+    away bar pushing left-to-right. Each bar is in the team's primary colour.
+    The winner of the row gets a brighter rendering; the loser is faded."""
+    # Defensive — if either value is missing, render an empty row
+    if home_val is None or away_val is None:
+        return (
+            f'<div class="mc-h2h-tor-row mc-h2h-tor-row-empty">'
+            f'  <div class="mc-h2h-tor-val mc-h2h-tor-val-h">—</div>'
+            f'  <div class="mc-h2h-tor-bars">'
+            f'    <div class="mc-h2h-tor-bar-h"></div>'
+            f'    <div class="mc-h2h-tor-lbl">{stat_label}</div>'
+            f'    <div class="mc-h2h-tor-bar-a"></div>'
+            f'  </div>'
+            f'  <div class="mc-h2h-tor-val mc-h2h-tor-val-a">—</div>'
+            f'</div>'
+        )
+
+    # Each row normalises to the larger of the two values — so the leader
+    # always fills 100% of their half and the trailer fills proportionally
+    row_max = max(home_val, away_val)
+    if row_max > 0:
+        home_pct = (home_val / row_max) * 100.0
+        away_pct = (away_val / row_max) * 100.0
+    else:
+        home_pct = 0
+        away_pct = 0
+
+    # Team colours — primary background, with a faint glow in the same hue
+    home_colour = team_primary_bg(home_canonical)
+    away_colour = team_primary_bg(away_canonical)
+
+    # Highlight which team won this row — winner's value pops, loser fades
+    if home_val > away_val:
+        h_val_class, a_val_class = "mc-h2h-tor-val-win", "mc-h2h-tor-val-lose"
+    elif away_val > home_val:
+        h_val_class, a_val_class = "mc-h2h-tor-val-lose", "mc-h2h-tor-val-win"
+    else:
+        h_val_class = a_val_class = "mc-h2h-tor-val-tie"
+
+    # Format the values — integers display cleanly, decimals to 1dp
+    def _fmt(v):
+        if v == int(v):
+            return f"{int(v)}"
+        return f"{v:.1f}"
+
+    return (
+        f'<div class="mc-h2h-tor-row">'
+        f'  <div class="mc-h2h-tor-val mc-h2h-tor-val-h {h_val_class}">{_fmt(home_val)}</div>'
+        f'  <div class="mc-h2h-tor-bars">'
+        f'    <div class="mc-h2h-tor-bar-h" style="--bar-pct:{home_pct:.1f}%;--bar-color:{home_colour};"></div>'
+        f'    <div class="mc-h2h-tor-lbl">{stat_label}</div>'
+        f'    <div class="mc-h2h-tor-bar-a" style="--bar-pct:{away_pct:.1f}%;--bar-color:{away_colour};"></div>'
+        f'  </div>'
+        f'  <div class="mc-h2h-tor-val mc-h2h-tor-val-a {a_val_class}">{_fmt(away_val)}</div>'
+        f'</div>'
+    )
+
+
+def render_h2h_block(home, away, rankings_data, h2h_meetings, status):
+    """Render the full H2H disclosure block — a deliberately minimal closed
+    row that just says HEAD TO HEAD ANALYSIS with a chevron, expanding to reveal the
+    real content (W-L record banner, last-N meetings strip, season-averages
+    tornado). Returns '' (empty) when there's nothing meaningful to show,
+    so the card stays clean."""
+    home_c = canonical(home)
+    away_c = canonical(away)
+
+    # If we have neither rankings NOR meetings, hide entirely — no point
+    # showing an empty disclosure that adds visual noise
+    home_stats = (rankings_data or {}).get(home_c, {})
+    away_stats = (rankings_data or {}).get(away_c, {})
+    have_rankings = bool(home_stats) and bool(away_stats)
+    have_meetings = bool(h2h_meetings)
+
+    if not have_rankings and not have_meetings:
+        return ""
+
+    # Compute the home-team-perspective W-L record across the displayed
+    # meetings — used inside the expanded body, NOT in the closed summary.
+    # Keeping the summary content-free is the whole point of the redesign.
+    h_squiggle = H2H_SQUIGGLE_NAME.get(home_c)
+    h_wins = 0
+    a_wins = 0
+    draws = 0
+    for m in h2h_meetings:
+        hs = m.get("hscore", 0) or 0
+        as_ = m.get("ascore", 0) or 0
+        if hs == as_:
+            draws += 1
+        else:
+            winner_squiggle = m.get("hteam") if hs > as_ else m.get("ateam")
+            if winner_squiggle == h_squiggle:
+                h_wins += 1
+            else:
+                a_wins += 1
+
+    home_accent = team_accent(home_c)
+    away_accent = team_accent(away_c)
+    home_abbr = TEAM_ABBR.get(home_c, home_c[:3].upper())
+    away_abbr = TEAM_ABBR.get(away_c, away_c[:3].upper())
+
+    # ── Body banner: the W-L record, prominent, centred, team-coloured ──
+    # This is the FIRST thing the user sees on expand — replaces the role
+    # the summary-row pill used to play, but with way more breathing room.
+    if have_meetings:
+        draws_html = (
+            f'<span class="mc-h2h-recb-draws">+{draws} draw{"s" if draws != 1 else ""}</span>'
+            if draws else ''
+        )
+        record_banner = (
+            f'<div class="mc-h2h-recb">'
+            f'  <div class="mc-h2h-recb-side mc-h2h-recb-side-h" style="--team-accent:{home_accent};">'
+            f'    <div class="mc-h2h-recb-team">{home_abbr}</div>'
+            f'    <div class="mc-h2h-recb-num">{h_wins}</div>'
+            f'  </div>'
+            f'  <div class="mc-h2h-recb-mid">'
+            f'    <div class="mc-h2h-recb-lbl">Last {len(h2h_meetings)} Meetings</div>'
+            f'    {draws_html}'
+            f'  </div>'
+            f'  <div class="mc-h2h-recb-side mc-h2h-recb-side-a" style="--team-accent:{away_accent};">'
+            f'    <div class="mc-h2h-recb-num">{a_wins}</div>'
+            f'    <div class="mc-h2h-recb-team">{away_abbr}</div>'
+            f'  </div>'
+            f'</div>'
+        )
+    else:
+        record_banner = ''
+
+    # ── Body: Last-N meetings strip ──
+    if have_meetings:
+        meetings_html = "".join(
+            _h2h_meeting_card_html(m, home_c, away_c) for m in h2h_meetings
+        )
+        meetings_block = (
+            f'<div class="mc-h2h-section">'
+            f'  <div class="mc-h2h-section-head">'
+            f'    <span class="mc-h2h-section-glyph">◷</span>'
+            f'    <span class="mc-h2h-section-lbl">Last {len(h2h_meetings)} Meetings</span>'
+            f'  </div>'
+            f'  <div class="mc-h2h-meets">{meetings_html}</div>'
+            f'</div>'
+        )
+    else:
+        meetings_block = (
+            f'<div class="mc-h2h-section">'
+            f'  <div class="mc-h2h-section-head">'
+            f'    <span class="mc-h2h-section-glyph">◷</span>'
+            f'    <span class="mc-h2h-section-lbl">Recent Meetings</span>'
+            f'  </div>'
+            f'  <div class="mc-h2h-meets-empty">'
+            f'    <span class="mc-h2h-empty-glyph">·</span>'
+            f'    No recent meetings between these clubs in the last {H2H_LOOKBACK_YEARS} seasons'
+            f'  </div>'
+            f'</div>'
+        )
+
+    # ── Body: Tornado chart — "This Season's Averages" ──
+    if have_rankings:
+        # Header row with logos + team labels (the central axis label is
+        # now redundant since the section heading already says "This
+        # Season's Averages", so it's been removed for a cleaner read)
+        home_logo = TEAM_LOGOS.get(home_c, "")
+        away_logo = TEAM_LOGOS.get(away_c, "")
+        home_logo_html = f'<img src="{home_logo}" class="mc-h2h-tor-logo" />' if home_logo else ''
+        away_logo_html = f'<img src="{away_logo}" class="mc-h2h-tor-logo" />' if away_logo else ''
+
+        torn_header = (
+            f'<div class="mc-h2h-tor-header">'
+            f'  <div class="mc-h2h-tor-team mc-h2h-tor-team-h" style="--team-accent:{home_accent};">'
+            f'    {home_logo_html}'
+            f'    <div class="mc-h2h-tor-team-abbr">{home_abbr}</div>'
+            f'  </div>'
+            f'  <div class="mc-h2h-tor-divider"></div>'
+            f'  <div class="mc-h2h-tor-team mc-h2h-tor-team-a" style="--team-accent:{away_accent};">'
+            f'    <div class="mc-h2h-tor-team-abbr">{away_abbr}</div>'
+            f'    {away_logo_html}'
+            f'  </div>'
+            f'</div>'
+        )
+
+        rows_html = "".join(
+            _h2h_tornado_row_html(
+                code, label,
+                home_stats.get(code), away_stats.get(code),
+                home_c, away_c,
+            )
+            for code, label in H2H_TORNADO_STATS
+        )
+
+        tornado_block = (
+            f'<div class="mc-h2h-section">'
+            f'  <div class="mc-h2h-section-head">'
+            f'    <span class="mc-h2h-section-glyph">⌬</span>'
+            f"    <span class=\"mc-h2h-section-lbl\">This Season&rsquo;s Averages</span>"
+            f'    <span class="mc-h2h-section-sub">per game</span>'
+            f'  </div>'
+            f'  <div class="mc-h2h-tor">'
+            f'    {torn_header}'
+            f'    <div class="mc-h2h-tor-rows">{rows_html}</div>'
+            f'  </div>'
+            f'</div>'
+        )
+    else:
+        tornado_block = (
+            f'<div class="mc-h2h-section">'
+            f'  <div class="mc-h2h-section-head">'
+            f'    <span class="mc-h2h-section-glyph">⌬</span>'
+            f"    <span class=\"mc-h2h-section-lbl\">This Season&rsquo;s Averages</span>"
+            f'  </div>'
+            f'  <div class="mc-h2h-meets-empty">'
+            f'    <span class="mc-h2h-empty-glyph">·</span>'
+            f'    Season averages temporarily unavailable'
+            f'  </div>'
+            f'</div>'
+        )
+
+    # ── Stitch the full <details> disclosure ──
+    # CLOSED STATE is deliberately stripped to its absolute minimum: just
+    # the title and a chevron. All the W-L numbers, status text, icon and
+    # CTA pill have moved INTO the body so the closed row reads as a
+    # single-purpose control, not a content block. The reveal on click is
+    # where everything happens.
+    return (
+        f'<details class="mc-h2h-disclosure">'
+        f'  <summary class="mc-h2h-summary">'
+        f'    <span class="mc-h2h-sum-title">Head to Head Analysis</span>'
+        f'    <span class="mc-h2h-sum-chevron">›</span>'
+        f'  </summary>'
+        f'  <div class="mc-h2h-body">'
+        f'    {record_banner}'
+        f'    {meetings_block}'
+        f'    {tornado_block}'
+        f'  </div>'
+        f'</details>'
+    )
+
+
 def render_tips(games, tips, sources, top_models, weights, rnd,
                 standings_lookup=None, all_season_games=None):
     standings_lookup = standings_lookup or {}
@@ -2890,6 +3958,13 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
     # per round. Returns ({}, status) on any failure — we surface the status
     # so the user knows whether teams aren't named yet vs. the scraper broke.
     selections_data, selections_status = fetch_team_selections()
+
+    # Fetch H2H feature data once per render — both calls are cached so this
+    # is essentially free on subsequent renders. Silent on failure: the
+    # render_h2h_block helper hides itself entirely when data is missing,
+    # so there's no need for a status banner like the team-lists feed has.
+    h2h_rankings, _h2h_rankings_status = fetch_h2h_rankings()
+    h2h_game_pool = fetch_h2h_game_pool()
 
     # Surface a single round-wide status banner ONLY for actionable failures.
     # The "ok" / "empty" cases are silent — per-card disclaimers handle those.
@@ -3126,6 +4201,15 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
                         f"{tipped_abbr_local} {tipped_diff}",
                     )
 
+        # Build this game's H2H block — last 5 meetings filtered from the
+        # shared pool, plus tornado rows from the season-averages rankings.
+        # Returns '' (empty string) when both data sources are unavailable
+        # so the card stays clean instead of showing a broken disclosure.
+        h2h_meetings_for_game = build_h2h_meetings(home, away, h2h_game_pool)
+        h2h_block_html = render_h2h_block(
+            home, away, h2h_rankings, h2h_meetings_for_game, _h2h_rankings_status
+        )
+
         st.markdown(_h(f"""
         <div id="g-{game['id']}" class="mc mc-conf-{conf_tier} {'mc-live' if status == 'live' else ''}" style="animation-delay:{i*0.04}s; {card_style_extra}">
           <div style="height:2px;background:linear-gradient(90deg,{home_bg} 0%,{home_bg} 49%,var(--border) 49%,var(--border) 51%,{away_bg} 51%,{away_bg} 100%);"></div>
@@ -3162,6 +4246,7 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
               {render_team_selections_inline(away, home, selections_data, away_bg, dp)}
             </div>
           </div>
+          {h2h_block_html}
           <div class="mc-tip">
             <div class="mc-tip-lbl">Our Prediction</div>
             <div class="mc-tip-chip-row">
@@ -7566,7 +8651,7 @@ def main():
         )
 
         # Target a 20-second total ceremony — pad with sleep if the fetch is faster.
-        TARGET_DURATION = 20.0
+        TARGET_DURATION = 30.0
         fetch_start = time.time()
 
     with st.spinner(""):
@@ -8073,4 +9158,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

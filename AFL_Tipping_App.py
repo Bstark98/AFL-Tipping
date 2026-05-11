@@ -26,25 +26,33 @@ def _h(html):
 # ════════════════════════════════════════════════════════════════════════════
 # TEAM COLOURS & LOGOS
 # ════════════════════════════════════════════════════════════════════════════
+# Each tuple is (foreground/text colour, primary background colour) — both
+# in 6-digit hex. Values sourced from teamcolorcodes.com cross-referenced
+# with encycolorpedia.com Pantone references; the canonical AFL palette
+# Pantone codes are noted alongside each entry so future audits can match
+# back. Where official guidelines provide multiple primaries (e.g. Adelaide
+# has 5 official colours), we pick the two that best support the app's
+# "team-coloured chip on dark UI" use case — typically the boldest primary
+# as background and a contrasting brand colour for text/glyphs.
 TEAM_COLOURS = {
-    "Adelaide":         ("#FFD200", "#002B5C"),
-    "Brisbane Lions":   ("#FDBE57", "#A30046"),
-    "Carlton":          ("#FFFFFF", "#0E1E2D"),
-    "Collingwood":      ("#000000", "#FFFFFF"),
-    "Essendon":         ("#CC2031", "#000000"),
-    "Fremantle":        ("#FFFFFF", "#2A1A54"),
-    "Geelong":          ("#FFFFFF", "#1C3C63"),
-    "Gold Coast":       ("#FFDD00", "#D93E39"),
-    "GWS Giants":       ("#F15C22", "#384752"),
-    "Hawthorn":         ("#FBBF15", "#4D2004"),
-    "Melbourne":        ("#FFFFFF", "#CC2031"),
-    "North Melbourne":  ("#FFFFFF", "#013B9F"),
-    "Port Adelaide":    ("#FFFFFF", "#008AAB"),
-    "Richmond":         ("#000000", "#FED102"),
-    "St Kilda":         ("#FFFFFF", "#ED0F05"),
-    "Sydney":           ("#FFFFFF", "#ED171F"),
-    "West Coast":       ("#F2A900", "#002B5C"),
-    "Western Bulldogs": ("#FFFFFF", "#014896"),
+    "Adelaide":         ("#FFD200", "#002B5C"),  # Gold PMS 116C + Navy PMS 648C
+    "Brisbane Lions":   ("#FDBE57", "#A30046"),  # Gold PMS 135C + Maroon PMS 215C
+    "Carlton":          ("#FFFFFF", "#031A29"),  # White + Navy PMS 296C (corrected from #0E1E2D)
+    "Collingwood":      ("#000000", "#FFFFFF"),  # Black + White
+    "Essendon":         ("#CC2031", "#000000"),  # Red PMS 186C + Black PMS Black 6C
+    "Fremantle":        ("#FFFFFF", "#2A0D54"),  # White + Purple PMS 269C (refined)
+    "Geelong":          ("#FFFFFF", "#002B5C"),  # White + Navy PMS 648C (corrected from #1C3C63)
+    "Gold Coast":       ("#FFDD00", "#D93E39"),  # Yellow + Red
+    "GWS Giants":       ("#F15C22", "#384752"),  # Orange PMS 1655C + Charcoal
+    "Hawthorn":         ("#FBBF15", "#4E2A0C"),  # Gold PMS 124C + Brown PMS 4625C (refined)
+    "Melbourne":        ("#CD1A2E", "#0F1131"),  # Red + Navy (palette corrected — Demons are navy with red sash, not red with white)
+    "North Melbourne":  ("#FFFFFF", "#013B9F"),  # White + Royal Blue PMS 286C
+    "Port Adelaide":    ("#FFFFFF", "#008AAB"),  # White + Teal PMS 633C
+    "Richmond":         ("#000000", "#FED102"),  # Black + Yellow PMS 116C
+    "St Kilda":         ("#FFFFFF", "#ED1C24"),  # White + Red PMS 485C (corrected from #ED0F05)
+    "Sydney":           ("#FFFFFF", "#ED171F"),  # White + Red PMS 185C
+    "West Coast":       ("#F2A900", "#002B5C"),  # Gold PMS 124C + Navy PMS 648C
+    "Western Bulldogs": ("#FFFFFF", "#014896"),  # White + Royal Blue PMS 286C
 }
 
 # ── TEAM_ACCENT_LEGIBLE ──
@@ -55,26 +63,29 @@ TEAM_COLOURS = {
 # brighter brand-adjacent shade so the abbreviation actually shows up.
 # For teams with a punchy primary (Brisbane crimson, Sydney red, Bulldogs
 # blue), the primary itself is fine. Tuned by hand for contrast and
-# distinctiveness — no two teams should read as the same colour.
+# distinctiveness — no two teams should read as the same colour, even
+# when they share the same official Pantone primary (Adelaide, Geelong
+# and West Coast all use PMS 648C navy as their primary background, so
+# their accents must differentiate them at a glance).
 TEAM_ACCENT_LEGIBLE = {
-    "Adelaide":         "#FFD200",  # gold (their text colour, pops on dark)
-    "Brisbane Lions":   "#E5184D",  # brightened crimson
-    "Carlton":          "#5A8FBA",  # lifted navy (Carlton's digital accent)
+    "Adelaide":         "#FFD200",  # club gold — bright pop on dark
+    "Brisbane Lions":   "#E5184D",  # brightened crimson (lifted from #A30046)
+    "Carlton":          "#6BA4D1",  # lifted bay-blue — reads on dark UI, distinct from Geelong
     "Collingwood":      "#E8E8E8",  # near-white (their primary is black, so white reads)
     "Essendon":         "#E8344A",  # Essendon red (lifted from #CC2031)
     "Fremantle":        "#9D7BFF",  # purple (lifted from their dark plum)
-    "Geelong":          "#5DA0E5",  # bay blue (lifted from #1C3C63)
+    "Geelong":          "#5DA0E5",  # cats' bay blue — distinct from Adelaide gold + WCE gold
     "Gold Coast":       "#FFD92A",  # gold (their text colour)
-    "GWS Giants":       "#F15C22",  # GWS orange
-    "Hawthorn":         "#FBBF15",  # gold (their text colour)
-    "Melbourne":        "#FF3D5A",  # demons red (lifted)
+    "GWS Giants":       "#F15C22",  # GWS orange (primary text colour)
+    "Hawthorn":         "#FBBF15",  # gold (their primary text colour)
+    "Melbourne":        "#FF3D5A",  # demons red — lifted from #CD1A2E for dark UI legibility
     "North Melbourne":  "#3D7CE5",  # roo blue (lifted from #013B9F)
     "Port Adelaide":    "#1AC3E5",  # teal (lifted from #008AAB)
     "Richmond":         "#FED102",  # tigers gold
     "St Kilda":         "#FF3322",  # saints red (lifted)
     "Sydney":           "#FF3D44",  # swans red (lifted)
-    "West Coast":       "#F2A900",  # eagles gold
-    "Western Bulldogs": "#3D7CE5",  # bulldogs blue (lifted from #014896)
+    "West Coast":       "#F2A900",  # eagles gold — warmer than Adelaide's brighter yellow
+    "Western Bulldogs": "#5588E8",  # bulldogs blue — slightly cooler than NM's blue for differentiation
 }
 
 TEAM_LOGOS = {
@@ -174,6 +185,29 @@ H2H_SQUIGGLE_NAME = {
 # can never drift apart.
 H2H_SQUIGGLE_TO_CANONICAL = {v: k for k, v in H2H_SQUIGGLE_NAME.items()}
 
+# ── PLAYER NAME RECONCILIATION ──
+# Footywire and AFL Fantasy don't always agree on what a player is called.
+# Footywire tends to use the formal/birth-certificate name ("Lachlan Ash",
+# "Zachary Merrett") while AFL Fantasy uses the everyday playing name
+# ("Lachie Ash", "Zach Merrett"). Both refer to the same person but our
+# normalised-string lookup will miss because the underlying letters differ.
+#
+# This map handles the gap: keyed by the footywire-served name (the one
+# we receive from the rankings scrape), valued by the AFL Fantasy form
+# (the one indexed in the headshot lookup dict). The headshot resolver
+# substitutes through this map BEFORE normalising, so a single dict
+# entry is enough — no need to duplicate variants like 'Lachlan' →
+# 'Lachie' as standalone rules.
+#
+# Add a new entry whenever you spot a player who's correctly ranked on
+# footywire but rendering with an initials fallback in the watchlist —
+# that's the signature of a name mismatch.
+H2H_PLAYER_NAME_ALIASES = {
+    "Lachlan Ash":      "Lachie Ash",
+    "Zachary Merrett":  "Zach Merrett",
+    "Thomas Stewart":   "Tom Stewart",
+}
+
 # Stat codes pulled from the rankings page — each maps a column header to
 # a friendly label for the tornado chart. Order here is the row order on
 # the chart (most-readable first: ball use, then scoring, then defence).
@@ -187,6 +221,20 @@ H2H_TORNADO_STATS = [
     ("R50", "Rebound 50s"),
     ("HO",  "Hitouts"),
 ]
+
+# ── ONES TO WATCH — player rankings shown under the tornado ──
+# Each entry: (footywire `st` param, human label, glyph for the header)
+# DI = Disposals, SI = Score Involvements. These two were chosen because
+# they capture both the ball-winner archetype (DI) and the goal-influencer
+# archetype (SI), giving a balanced read on a team's most impactful names.
+H2H_WATCHLIST_STATS = [
+    ("DI", "Disposals",          "◆"),
+    ("SI", "Score Involvements", "✦"),
+    ("IT", "Interceptors",       "⬢"),
+]
+# How many names per team per stat (3 is the sweet spot — enough to surface
+# real depth without dragging the section past one screen on mobile)
+H2H_WATCHLIST_TOP_N = 3
 
 # How many recent meetings to show in the strip (5 ≈ 2-3 seasons of meetings
 # for most pairs — enough to tell a story without overwhelming the card)
@@ -1356,7 +1404,7 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 
 /* ── SUMMARY ROW — DELIBERATELY MINIMAL ──
    The whole point of this redesign: the closed state is a single thin
-   line. Just "Head to Head Analysis" on the left, a faint chevron on the right.
+   line. Just "Head to Head" on the left, a faint chevron on the right.
    No icon, no record pill, no status text, no CTA chip. The reveal on
    click is where everything lives. */
 .mc-h2h-summary{
@@ -1803,6 +1851,584 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 }
 .mc-h2h-tor-row-empty .mc-h2h-tor-val{color:var(--text3); opacity:0.4;}
 
+/* ── ONES TO WATCH ── DISTINCT SECTION UNDER TORNADO
+   This panel deliberately sets itself apart from the meetings strip and
+   the tornado above. Three signals do the work:
+     1. The whole section has a slightly inset, darker background that
+        reads as its own card-within-a-card.
+     2. A thin "eyebrow" divider with a centred star glyph creates a hard
+        visual break above the panel — you can scan the disclosure and
+        see immediately where the tornado stops and the watchlist starts.
+     3. A two-line head (title + sub) sits centred under the eyebrow,
+        giving the section editorial weight instead of the smaller
+        left-aligned section heading the other panels use. */
+.mc-h2h-section-watch{
+  padding:0 14px 18px;
+  background:linear-gradient(180deg,
+    transparent,
+    color-mix(in srgb, var(--accent2) 3%, var(--bg2)) 12%,
+    color-mix(in srgb, var(--accent2) 2%, var(--bg2)) 100%);
+  border-top:1px solid var(--border);
+}
+
+/* Eyebrow — thin horizontal rule with a centred star, sits right at the
+   top of the panel acting as a "section break" you can scan past */
+.mc-h2h-watch-eyebrow{
+  display:flex; align-items:center;
+  gap:10px;
+  padding:14px 0 8px;
+  justify-content:center;
+}
+.mc-h2h-watch-eyebrow-line{
+  flex:1;
+  height:1px;
+  background:linear-gradient(90deg,
+    transparent,
+    color-mix(in srgb, var(--accent2) 30%, transparent),
+    transparent);
+  max-width:80px;
+}
+.mc-h2h-watch-eyebrow-glyph{
+  color:var(--accent2);
+  font-size:0.7rem;
+  line-height:1;
+  text-shadow:0 0 8px color-mix(in srgb, var(--accent2) 60%, transparent);
+  opacity:0.85;
+}
+
+/* Editorial head — centred title + sub-line, sits below the eyebrow */
+.mc-h2h-watch-head{
+  text-align:center;
+  margin-bottom:12px;
+}
+.mc-h2h-watch-title{
+  font-size:0.66rem; font-weight:800;
+  letter-spacing:0.18em; text-transform:uppercase;
+  color:var(--white);
+  line-height:1.2;
+  margin-bottom:3px;
+}
+.mc-h2h-watch-sub{
+  font-size:0.46rem; font-weight:500;
+  letter-spacing:0.06em;
+  color:var(--text3);
+  line-height:1.3;
+}
+
+/* Two-column grid (home left, away right) with each stat as a small
+   sub-block inside its team's column. Team's accent colour drives the
+   column header glow and the rank-number tint so the two halves remain
+   visually distinct without resorting to coloured cells everywhere. */
+
+/* ── TEAMS HEADER ──
+   Sits once at the top of the panel — anchors the user's left/right
+   mental model so the per-stat rows below don't need to repeat which
+   side is which team. */
+.mc-h2h-w-teams{
+  display:grid;
+  grid-template-columns:1fr 96px 1fr;
+  align-items:center;
+  gap:6px;
+  margin-bottom:10px;
+  padding:0 4px;
+}
+.mc-h2h-w-team-cell{
+  font-size:0.74rem; font-weight:800;
+  letter-spacing:0.16em;
+  color:var(--team-accent);
+  text-shadow:0 0 10px color-mix(in srgb, var(--team-accent) 55%, transparent);
+  text-transform:uppercase;
+  line-height:1;
+}
+.mc-h2h-w-team-h{text-align:right; padding-right:6px;}
+.mc-h2h-w-team-a{text-align:left;  padding-left:6px;}
+.mc-h2h-w-team-spacer{
+  height:1px;
+  background:linear-gradient(90deg,
+    transparent,
+    color-mix(in srgb, var(--accent2) 22%, transparent),
+    transparent);
+}
+
+/* ── STAT ROWS ──
+   Each watchlist stat (Disposals, Score Involvements, …) becomes one
+   horizontal row containing: home players block | matchup chip | away
+   players block. The 1fr / 96px / 1fr grid keeps the centre chip a
+   fixed-width column so the home/away blocks always have the same width
+   regardless of how many players each has. */
+.mc-h2h-w-stats{
+  display:flex; flex-direction:column;
+  gap:14px;
+}
+.mc-h2h-w-statrow{
+  position:relative;
+}
+/* Stat label sits as a thin centred eyebrow above each stat row.
+   Different from the team-column heading idea — this label belongs to
+   the matchup as a whole, not to either team. */
+.mc-h2h-w-statrow-head{
+  display:flex; align-items:center; justify-content:center;
+  gap:7px;
+  margin-bottom:8px;
+  padding:6px 0 5px;
+  position:relative;
+}
+.mc-h2h-w-statrow-head::before,
+.mc-h2h-w-statrow-head::after{
+  content:'';
+  flex:1;
+  height:1px;
+  background:linear-gradient(90deg,
+    transparent,
+    color-mix(in srgb, var(--accent2) 16%, transparent));
+  max-width:80px;
+}
+.mc-h2h-w-statrow-head::after{
+  background:linear-gradient(90deg,
+    color-mix(in srgb, var(--accent2) 16%, transparent),
+    transparent);
+}
+.mc-h2h-w-stat-glyph{
+  font-size:0.66rem;
+  color:var(--accent2);
+  opacity:0.9;
+  line-height:1;
+  text-shadow:0 0 6px color-mix(in srgb, var(--accent2) 45%, transparent);
+}
+.mc-h2h-w-stat-lbl{
+  font-size:0.5rem; font-weight:800;
+  letter-spacing:0.16em;
+  color:var(--white);
+  text-transform:uppercase;
+  line-height:1;
+}
+
+/* Body of each stat row — home side | matchup chip | away side */
+.mc-h2h-w-statrow-body{
+  display:grid;
+  grid-template-columns:1fr 96px 1fr;
+  align-items:center;
+  gap:6px;
+}
+
+/* ── ONE TEAM'S SIDE ──
+   Container for the 1-3 player rows belonging to one team for one stat.
+   Inherits its team accent via the --team-accent custom property set in
+   the markup. */
+.mc-h2h-w-side{
+  display:flex; flex-direction:column;
+  gap:5px;
+  padding:8px 10px;
+  background:linear-gradient(180deg,
+    color-mix(in srgb, var(--team-accent) 5%, var(--card)) 0%,
+    color-mix(in srgb, var(--team-accent) 2%, var(--card)) 100%);
+  border:1px solid color-mix(in srgb, var(--team-accent) 20%, var(--border2));
+  border-radius:6px;
+  min-height:60px;
+  justify-content:center;
+}
+/* Both sides render identically — same row direction, same column order
+   ([shot] [rank] [name] [avg]). The matchup chip in the centre + the
+   team-coloured headshot discs and rank numbers do all the work of
+   signalling which side is which team. Mirroring the away side felt
+   clever in theory but read as backwards in practice — Western eyes scan
+   left-to-right, and having the avg pill nearest the chip on one side
+   and the headshot nearest the chip on the other broke that flow. */
+.mc-h2h-w-side-empty{
+  align-items:center;
+}
+.mc-h2h-w-empty-line{
+  font-size:0.5rem; font-weight:600;
+  letter-spacing:0.04em;
+  color:var(--text3);
+  font-style:italic;
+  text-align:center;
+}
+
+/* ── MATCHUP CHIP — THE ENGAGEMENT PAYOFF ──
+   Sits centred between the two sides. Tells the user, at a glance, who's
+   ahead in this stat and by how much. Five states:
+     • neutral       → 'vs' divider when one or both sides lack players
+     • level         → exact tie (<0.05 gap)
+     • h / a winner  → team abbr + magnitude, accent-coloured in winner
+   The triangle marker points TOWARD the winning side, reinforcing the
+   visual direction. */
+.mc-h2h-w-vs{
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  gap:4px;
+  padding:6px 4px;
+  min-height:60px;
+  position:relative;
+}
+.mc-h2h-w-vs-line{
+  width:1px;
+  height:14px;
+  background:linear-gradient(180deg,
+    transparent,
+    color-mix(in srgb, var(--vs-accent, var(--text3)) 28%, transparent),
+    transparent);
+}
+/* Neutral / level — quiet, just announces the column without claiming */
+.mc-h2h-w-vs-neutral,
+.mc-h2h-w-vs-level{
+  --vs-accent:var(--text3);
+}
+.mc-h2h-w-vs-glyph{
+  font-size:0.48rem; font-weight:700;
+  letter-spacing:0.18em;
+  color:var(--text3);
+  text-transform:uppercase;
+  opacity:0.7;
+}
+.mc-h2h-w-vs-level-lbl{
+  font-size:0.46rem; font-weight:800;
+  letter-spacing:0.18em;
+  color:var(--amber);
+  text-transform:uppercase;
+  padding:3px 6px;
+  border-radius:3px;
+  background:rgba(251,191,36,0.08);
+  border:1px solid rgba(251,191,36,0.25);
+}
+
+/* Winner states — the real money shot of the redesign */
+.mc-h2h-w-vs-h,
+.mc-h2h-w-vs-a{
+  background:linear-gradient(180deg,
+    transparent,
+    color-mix(in srgb, var(--vs-accent) 8%, transparent),
+    transparent);
+}
+.mc-h2h-w-vs-marker{
+  font-size:0.8rem;
+  line-height:1;
+  color:var(--vs-accent);
+  text-shadow:0 0 6px color-mix(in srgb, var(--vs-accent) 55%, transparent);
+  /* Subtle "pointing" wiggle to draw the eye to the winning side. Only
+     animates once on mount so it doesn't loop forever and become noise. */
+  animation:mc-h2h-w-vs-point 0.6s ease-out both;
+}
+.mc-h2h-w-vs-h .mc-h2h-w-vs-marker{
+  animation-name:mc-h2h-w-vs-point-h;
+}
+@keyframes mc-h2h-w-vs-point{
+  0%   {opacity:0; transform:translateX(3px);}
+  100% {opacity:1; transform:translateX(0);}
+}
+@keyframes mc-h2h-w-vs-point-h{
+  0%   {opacity:0; transform:translateX(-3px);}
+  100% {opacity:1; transform:translateX(0);}
+}
+.mc-h2h-w-vs-team{
+  font-size:0.6rem; font-weight:800;
+  letter-spacing:0.12em;
+  color:var(--vs-accent);
+  text-shadow:0 0 6px color-mix(in srgb, var(--vs-accent) 45%, transparent);
+  text-transform:uppercase;
+  line-height:1;
+}
+.mc-h2h-w-vs-gap{
+  font-size:0.62rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  color:var(--white);
+  line-height:1;
+  letter-spacing:-0.01em;
+  padding:2px 7px;
+  border-radius:3px;
+  background:color-mix(in srgb, var(--vs-accent) 14%, transparent);
+  border:1px solid color-mix(in srgb, var(--vs-accent) 32%, transparent);
+}
+@media (prefers-reduced-motion: reduce){
+  .mc-h2h-w-vs-marker{animation:none;}
+}
+
+/* ── TEAM LEADER LIFT ──
+   The top-ranked player ON THIS TEAM (separate from the league-wide
+   medal) gets a slight elevation — brighter avg pill, slightly heavier
+   name. Independent of data-rank so a team's leader who happens to be
+   league #1 stacks both treatments. */
+.mc-h2h-w-row[data-team-leader="1"] .mc-h2h-w-avg{
+  background:color-mix(in srgb, var(--team-accent) 18%, transparent);
+  border-color:color-mix(in srgb, var(--team-accent) 42%, transparent);
+}
+.mc-h2h-w-row[data-team-leader="1"] .mc-h2h-w-name{
+  font-weight:700;
+}
+
+/* Player rows — rank | name | avg */
+.mc-h2h-w-rows{
+  display:flex; flex-direction:column;
+  gap:5px;
+}
+.mc-h2h-w-row{
+  display:grid;
+  grid-template-columns:28px 24px 1fr auto;
+  align-items:center;
+  gap:6px;
+  padding:3px 0;
+  min-height:28px;
+}
+
+/* ── HEADSHOT CIRCLE ──
+   The visual centrepiece of the watchlist rows. Two-layer construction:
+     • Outer span — the translucent team-accented disc (always visible)
+     • Inner img    — the AFL Fantasy headshot, transparent PNG, sits on
+                      top of the disc and shows through to it around the
+                      edges of the player's shoulders.
+     • Inner span   — fallback initials, sits behind the img so they're
+                      automatically revealed if the img fails or is hidden.
+   The img is positioned absolute so the initials underneath naturally
+   become visible the moment the img display is set to none (via the
+   onerror handler) — no JS or CSS class swaps needed. */
+.mc-h2h-w-shot{
+  position:relative;
+  display:inline-flex;
+  align-items:center; justify-content:center;
+  width:28px; height:28px;
+  flex-shrink:0;
+  border-radius:50%;
+  background:radial-gradient(circle at 50% 35%,
+    color-mix(in srgb, var(--team-accent) 28%, transparent) 0%,
+    color-mix(in srgb, var(--team-accent) 14%, transparent) 55%,
+    color-mix(in srgb, var(--team-accent) 8%, transparent) 100%);
+  border:1px solid color-mix(in srgb, var(--team-accent) 35%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    0 0 8px color-mix(in srgb, var(--team-accent) 18%, transparent);
+  overflow:hidden;
+  /* The disc itself doesn't need a transition — only the image fade-in does */
+}
+/* The initials placeholder — sits at the bottom of the stack. Always
+   present so that if the img hides (onerror or unconfigured), they're
+   immediately visible without any layout shift. */
+.mc-h2h-w-shot-initials{
+  position:absolute;
+  inset:0;
+  display:flex; align-items:center; justify-content:center;
+  font-family:var(--mono);
+  font-size:0.54rem; font-weight:800;
+  letter-spacing:0.04em;
+  color:color-mix(in srgb, var(--team-accent) 85%, var(--white));
+  text-shadow:0 0 4px color-mix(in srgb, var(--team-accent) 50%, transparent);
+  line-height:1;
+  user-select:none;
+  pointer-events:none;
+}
+/* The actual headshot image — covers the initials when loaded successfully.
+   `object-fit: cover` with a slight downward shift puts the player's eyes
+   in the upper half of the circle, which is where the brain naturally
+   looks for a face. The image's own transparent BG lets the team-coloured
+   disc bleed through behind the player's shoulders for a "team identity"
+   feel without needing a coloured backdrop. */
+.mc-h2h-w-shot-img{
+  position:absolute;
+  inset:0;
+  width:100%; height:100%;
+  object-fit:cover;
+  object-position:center 22%;
+  /* Crisp scaling when the browser downscales the 450px CDN image */
+  image-rendering:auto;
+  /* Soft fade-in so images don't pop into place jarringly when they load.
+     Browser-driven — the img is opaque until loaded, then transitions. */
+  animation:mc-h2h-w-shot-fade 0.45s ease-out both;
+}
+@keyframes mc-h2h-w-shot-fade{
+  from{opacity:0; transform:scale(0.92);}
+  to  {opacity:1; transform:scale(1);}
+}
+/* Explicit fallback variant — applied when no Fantasy id was resolved.
+   Slightly more muted styling so unmatched rows feel deliberate rather
+   than broken. The initials show alone (no img child rendered). */
+.mc-h2h-w-shot-fallback{
+  background:radial-gradient(circle at 50% 35%,
+    color-mix(in srgb, var(--team-accent) 18%, transparent) 0%,
+    color-mix(in srgb, var(--team-accent) 8%, transparent) 100%);
+  border-style:dashed;
+  border-color:color-mix(in srgb, var(--team-accent) 24%, transparent);
+}
+.mc-h2h-w-shot-fallback .mc-h2h-w-shot-initials{
+  opacity:0.85;
+}
+
+/* Medal-tier headshots — gold/silver/bronze get a brighter ring matching
+   the rank colour. Subtly overrides the team-accent ring so the row's
+   visual leader-signal carries through to the headshot too. */
+.mc-h2h-w-row[data-rank="1"] .mc-h2h-w-shot{
+  border-color:rgba(251,191,36,0.6);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 0 10px rgba(251,191,36,0.32);
+}
+.mc-h2h-w-row[data-rank="2"] .mc-h2h-w-shot{
+  border-color:rgba(212,218,224,0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 0 8px rgba(212,218,224,0.22);
+}
+.mc-h2h-w-row[data-rank="3"] .mc-h2h-w-shot{
+  border-color:rgba(212,144,96,0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 0 8px rgba(212,144,96,0.22);
+}
+@media (prefers-reduced-motion: reduce){
+  .mc-h2h-w-shot-img{animation:none;}
+}
+
+/* Rank is the player's LEAGUE-WIDE position from footywire's leaderboard.
+   Prefixed with # via ::before so the data layer stays clean (just the
+   integer), and the visual hint that "this is a rank" lives in CSS. Width
+   accommodates up to 3 digits for late-career ruckmen way down the list.
+
+   Ranks 1/2/3 get gold/silver/bronze medal styling — overriding the team
+   accent. Rank 1 additionally gets a crown glyph inline in the player
+   name (rendered server-side, see _watch_row_html). The medal palette
+   sits in CSS custom properties for one-stop tweaking. */
+.mc-h2h-w-rank{
+  font-size:0.5rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  color:var(--team-accent);
+  opacity:0.8;
+  text-align:right;
+  line-height:1;
+  letter-spacing:-0.01em;
+}
+.mc-h2h-w-rank::before{
+  content:'#';
+  opacity:0.5;
+  margin-inline-end:1px;
+  font-weight:600;
+}
+
+/* ── MEDAL TIERS ──
+   Each tier overrides the team-accent base. The rank number itself glows
+   in the medal colour, and the avg pill on the same row picks up a faint
+   tinted border so the whole row reads as "this one is special". */
+.mc-h2h-w-row[data-rank="1"] .mc-h2h-w-rank,
+.mc-h2h-w-row[data-rank="2"] .mc-h2h-w-rank,
+.mc-h2h-w-row[data-rank="3"] .mc-h2h-w-rank{
+  opacity:1;
+  font-size:0.58rem;
+  letter-spacing:-0.02em;
+}
+
+/* Rank 1 — Gold. Brightest, deepest glow, drops the # prefix entirely
+   because the crown already announces "this is the leader". */
+.mc-h2h-w-row[data-rank="1"] .mc-h2h-w-rank{
+  color:#fbbf24;
+  text-shadow:
+    0 0 6px rgba(251,191,36,0.5),
+    0 0 14px rgba(251,191,36,0.18);
+}
+.mc-h2h-w-row[data-rank="1"] .mc-h2h-w-rank::before{
+  content:none;
+}
+/* Lift the player name & avg too — this is the league leader, give them
+   visual weight commensurate with that */
+.mc-h2h-w-row[data-rank="1"] .mc-h2h-w-name{
+  color:#fff7d6;
+}
+.mc-h2h-w-row[data-rank="1"] .mc-h2h-w-avg{
+  background:rgba(251,191,36,0.13);
+  border-color:rgba(251,191,36,0.45);
+  color:#fff7d6;
+}
+
+/* Rank 2 — Silver. Cool white-grey with a soft sheen. */
+.mc-h2h-w-row[data-rank="2"] .mc-h2h-w-rank{
+  color:#d4dae0;
+  text-shadow:0 0 5px rgba(212,218,224,0.35);
+}
+.mc-h2h-w-row[data-rank="2"] .mc-h2h-w-rank::before{
+  color:#9ba3ab;
+  opacity:0.8;
+}
+.mc-h2h-w-row[data-rank="2"] .mc-h2h-w-avg{
+  background:rgba(212,218,224,0.06);
+  border-color:rgba(212,218,224,0.28);
+}
+
+/* Rank 3 — Bronze. Warm copper, deeper than gold so it doesn't compete. */
+.mc-h2h-w-row[data-rank="3"] .mc-h2h-w-rank{
+  color:#d49060;
+  text-shadow:0 0 5px rgba(212,144,96,0.32);
+}
+.mc-h2h-w-row[data-rank="3"] .mc-h2h-w-rank::before{
+  color:#a36b40;
+  opacity:0.8;
+}
+.mc-h2h-w-row[data-rank="3"] .mc-h2h-w-avg{
+  background:rgba(212,144,96,0.07);
+  border-color:rgba(212,144,96,0.28);
+}
+
+/* ── CROWN ──
+   The ♕ glyph (Unicode white queen — reads as "crown" more naturally
+   than the chess king ♔) sits inline before the player's name on rank 1
+   only. Gold-tinted with the same glow as the rank number so the two
+   gold elements feel linked across the row. */
+.mc-h2h-w-crown{
+  display:inline-block;
+  font-size:0.7rem;
+  line-height:1;
+  /* Logical property — becomes margin-right in LTR rows (home side)
+     and margin-left in RTL-mirrored rows (away side). Keeps the gap
+     between crown and name name on the correct side regardless. */
+  margin-inline-end:5px;
+  color:#fbbf24;
+  text-shadow:
+    0 0 6px rgba(251,191,36,0.55),
+    0 0 12px rgba(251,191,36,0.25);
+  vertical-align:-1px;
+  /* Gentle opacity pulse so the crown reads as the most active element in
+     the panel without screaming for attention. Opacity-only (no transform)
+     keeps the rest of the row dead-still each cycle — no risk of the
+     player name appearing to twitch as the crown's bounding box shifts. */
+  animation:mc-h2h-w-crown-pulse 4.5s ease-in-out infinite;
+}
+@keyframes mc-h2h-w-crown-pulse{
+  0%,100% {opacity:0.88;}
+  50%     {opacity:1;}
+}
+@media (prefers-reduced-motion: reduce){
+  .mc-h2h-w-crown{animation:none;}
+}
+.mc-h2h-w-name{
+  font-size:0.6rem; font-weight:600;
+  color:var(--white);
+  line-height:1.1;
+  letter-spacing:0.01em;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-family:var(--mono);
+}
+.mc-h2h-w-avg{
+  font-size:0.62rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  color:var(--white);
+  line-height:1;
+  letter-spacing:-0.01em;
+  padding:1px 5px;
+  border-radius:3px;
+  background:color-mix(in srgb, var(--team-accent) 10%, transparent);
+  border:1px solid color-mix(in srgb, var(--team-accent) 22%, transparent);
+}
+.mc-h2h-w-empty{
+  font-size:0.46rem; font-weight:500;
+  letter-spacing:0.04em;
+  color:var(--text3);
+  font-style:italic;
+  padding:3px 0;
+  display:flex; align-items:center; gap:5px;
+}
+.mc-h2h-w-empty-glyph{
+  color:var(--text3);
+  opacity:0.5;
+  font-size:0.66rem;
+}
+
 /* ── MOBILE TWEAKS ──
    Closed summary is already minimal — just tighten margins. Inside the
    body, shrink the tornado columns and the record banner numbers so
@@ -1846,6 +2472,44 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   .mc-h2h-tor-header{padding:8px 10px;}
   .mc-h2h-tor-team-abbr{font-size:0.62rem;}
   .mc-h2h-tor-logo{width:20px; height:20px;}
+
+  /* Watchlist — tighten the per-stat matchup layout for phone-width cards.
+     The centre chip column shrinks from 96px → 70px to leave more room
+     for player names on the sides, and chip internals scale down to match. */
+  .mc-h2h-w-teams{
+    grid-template-columns:1fr 70px 1fr;
+    margin-bottom:8px;
+  }
+  .mc-h2h-w-team-cell{font-size:0.62rem; letter-spacing:0.12em;}
+  .mc-h2h-w-stats{gap:11px;}
+  .mc-h2h-w-statrow-head{gap:6px; margin-bottom:6px; padding:4px 0;}
+  .mc-h2h-w-statrow-head::before,
+  .mc-h2h-w-statrow-head::after{max-width:50px;}
+  .mc-h2h-w-stat-lbl{font-size:0.44rem; letter-spacing:0.12em;}
+  .mc-h2h-w-stat-glyph{font-size:0.58rem;}
+  .mc-h2h-w-statrow-body{
+    grid-template-columns:1fr 70px 1fr;
+    gap:4px;
+  }
+  .mc-h2h-w-side{padding:6px 7px; gap:4px; min-height:54px;}
+  .mc-h2h-w-vs{padding:4px 2px; gap:3px; min-height:54px;}
+  .mc-h2h-w-vs-marker{font-size:0.7rem;}
+  .mc-h2h-w-vs-team{font-size:0.52rem; letter-spacing:0.1em;}
+  .mc-h2h-w-vs-gap{font-size:0.54rem; padding:1px 5px;}
+  .mc-h2h-w-vs-line{height:10px;}
+  .mc-h2h-w-vs-glyph{font-size:0.42rem; letter-spacing:0.14em;}
+  .mc-h2h-w-vs-level-lbl{font-size:0.4rem; padding:2px 5px; letter-spacing:0.14em;}
+  .mc-h2h-w-row{
+    grid-template-columns:24px 20px 1fr auto;
+    gap:5px;
+    min-height:24px;
+  }
+  .mc-h2h-w-name{font-size:0.54rem;}
+  .mc-h2h-w-avg{font-size:0.56rem; padding:1px 4px;}
+  .mc-h2h-w-rank{font-size:0.46rem;}
+  .mc-h2h-w-shot{width:24px; height:24px;}
+  .mc-h2h-w-shot-initials{font-size:0.46rem;}
+  .mc-h2h-w-empty-line{font-size:0.46rem;}
 }
 
 /* Respect reduced-motion preference */
@@ -3561,6 +4225,252 @@ def fetch_h2h_rankings():
     return (by_canonical, "ok")
 
 
+# ── ONES TO WATCH — player rankings scraper ──
+# Pulls the same footywire ft_player_rankings page that powers the
+# league-average leaderboards, parameterised by a stat code (DI / SI).
+# Cached for 6 hours since per-game averages move slowly across a season.
+
+def _h2h_player_rankings_url(stat_code):
+    """Build the footywire player-rankings URL for one stat in the current
+    year. Year is computed from `datetime.now()` so the app naturally rolls
+    over to the next season without code changes."""
+    year = datetime.now().year
+    return (
+        f"https://www.footywire.com/afl/footy/ft_player_rankings"
+        f"?year={year}&rt=LA&pt=&st={stat_code}&mg=8"
+    )
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def fetch_h2h_player_rankings(stat_code):
+    """Scrape the player-rankings page for a single stat (e.g. 'DI' for
+    Disposals, 'SI' for Score Involvements). Returns a dict keyed by
+    canonical app team name → list of (league_rank, player_name, average)
+    triples, sorted by average DESC (the page is already in this order, we
+    just preserve it). The league_rank is the player's position on the
+    league-wide leaderboard — i.e. the 'Rank' column from footywire — so a
+    rank of 5 means '5th best in the AFL for this stat', not '5th on this
+    team'. Returns ({}, status) on any failure."""
+    try:
+        from bs4 import BeautifulSoup as _BS
+    except ImportError:
+        return ({}, "missing-deps")
+
+    html = _fw_fetch(_h2h_player_rankings_url(stat_code))
+    if not html:
+        return ({}, "scrape-failed")
+
+    try:
+        soup = _BS(html, "html.parser")
+    except Exception:
+        return ({}, "scrape-failed")
+
+    # Find the table whose first row starts with "Rank Player Team" — that's
+    # the leaderboard. Header text varies per stat (the 5th column reads e.g.
+    # "Disposals for Last Game" or "Score Involvements for Last Game"), so
+    # anchor on the stable prefix.
+    target_table = None
+    for table in soup.find_all("table"):
+        header_preview = table.get_text(" ", strip=True)[:80]
+        if header_preview.startswith("Rank Player Team"):
+            target_table = table
+            break
+    if target_table is None:
+        return ({}, "scrape-failed")
+
+    rows = target_table.find_all("tr")
+    if not rows:
+        return ({}, "scrape-failed")
+
+    # Build {nickname → [(league_rank, player, avg), ...]} in page order
+    # (already sorted by average DESC because the page is presented as a
+    # leaderboard). The league_rank is the actual rank shown on footywire —
+    # this is what we display in the UI, so the user sees that a player is
+    # e.g. 5th in the league, not just 1st on their team's filtered subset.
+    by_nickname = {}
+    for row in rows[1:]:
+        cells = row.find_all(["th", "td"])
+        if len(cells) < 6:
+            continue
+        rank_txt = cells[0].get_text(strip=True)
+        if not rank_txt.isdigit():
+            continue
+        league_rank = int(rank_txt)
+        # Player name (cell 1) and team nickname (cell 2) come from <a> tags;
+        # taking the text strips the link wrapper cleanly. Cells 3 & 4 (Games,
+        # "<Stat> for Last Game") are intentionally ignored — we only care
+        # about the league rank, the player, and the season average.
+        player_name = cells[1].get_text(strip=True)
+        team_nickname = cells[2].get_text(strip=True)
+        avg_txt = cells[5].get_text(strip=True)
+        try:
+            avg_val = float(avg_txt)
+        except (ValueError, TypeError):
+            continue
+        if not player_name or not team_nickname:
+            continue
+        by_nickname.setdefault(team_nickname, []).append(
+            (league_rank, player_name, avg_val)
+        )
+
+    # Re-key by canonical app name using the same nickname map the tornado
+    # uses, so callers can look up by 'Brisbane Lions' rather than 'Lions'
+    by_canonical = {}
+    for canonical_name, nickname in H2H_RANKINGS_NICKNAME.items():
+        if nickname in by_nickname:
+            by_canonical[canonical_name] = by_nickname[nickname]
+
+    if not by_canonical:
+        return ({}, "empty")
+    return (by_canonical, "ok")
+
+
+# ── PLAYER HEADSHOTS — AFL Fantasy JSON + CDN images ──
+# Discovered via reddit — AFL Fantasy publishes a public JSON of every
+# rostered player keyed by their internal player_id, and the same id slots
+# into a public CDN URL pattern for high-res transparent-background
+# headshots (eyes centred, professional crop, no logos). We use this to
+# light up the "Ones to Watch" rows with proper photos.
+#
+# Strategy:
+#   1. Fetch the JSON once per session (cached 24h — roster is stable)
+#   2. Build a normalised {full_name: player_id} lookup
+#   3. Resolve each watchlist player's id at render time (cheap dict hit)
+#   4. Browser fetches the headshot direct from the CDN, lazy-loaded.
+#      Fallback: if the URL 404s or the player isn't in our lookup, the
+#      CSS renders the team-accented initials placeholder underneath.
+
+_H2H_FANTASY_PLAYERS_URL = "https://fantasy.afl.com.au/data/afl/players.json"
+_H2H_HEADSHOT_URL_TMPL = "https://fantasy.afl.com.au/assets/media/players/afl/{pid}_450.png"
+
+
+def _normalise_player_name(name):
+    """Build a stable, lowercase, punctuation-free key for matching player
+    names between the footywire scrape and the AFL Fantasy JSON. Strips
+    apostrophes (O'Meara/OMeara), hyphens (Wanganeen-Milera collapses),
+    diacritics (Bonţempelli → bontempelli), and collapses internal
+    whitespace. Returns '' for empty/None input."""
+    if not name:
+        return ""
+    import unicodedata
+    # NFKD splits 'é' into 'e' + accent; we then drop the accents
+    decomposed = unicodedata.normalize("NFKD", str(name))
+    ascii_form = "".join(c for c in decomposed if not unicodedata.combining(c))
+    # Lower-case and strip everything that isn't a letter or a space; this
+    # naturally handles O'Meara, McAdam, Wanganeen-Milera, jr/snr suffixes
+    cleaned = "".join(c if (c.isalpha() or c == " ") else "" for c in ascii_form.lower())
+    # Collapse internal whitespace to a single space
+    return " ".join(cleaned.split())
+
+
+@st.cache_data(ttl=86400, show_spinner=False)  # 24h — roster moves rarely
+def fetch_h2h_player_id_lookup():
+    """Pull the AFL Fantasy players JSON and return a dict of
+    {normalised_full_name: player_id}. Uses the existing app session so it
+    benefits from cloudscraper / connection pooling. Defensive about the
+    JSON schema — AFL Fantasy occasionally renames fields between seasons
+    so we accept multiple variants and skip entries we can't parse.
+    Returns ({}, status) on any failure."""
+    try:
+        r = SESSION.get(_H2H_FANTASY_PLAYERS_URL, timeout=30,
+                        headers={"User-Agent": HEADERS["User-Agent"],
+                                 "Accept": "application/json"})
+        if r.status_code != 200:
+            return ({}, "fetch-failed")
+        payload = r.json()
+    except Exception:
+        return ({}, "fetch-failed")
+
+    # The payload is sometimes a bare list and sometimes wrapped in a
+    # 'players' or 'items' key — handle both shapes
+    if isinstance(payload, dict):
+        players_list = (
+            payload.get("players")
+            or payload.get("items")
+            or payload.get("data")
+            or []
+        )
+    elif isinstance(payload, list):
+        players_list = payload
+    else:
+        return ({}, "unexpected-shape")
+
+    # Field-name candidates ordered by historical likelihood. We try each
+    # for every entry; first non-empty wins. Keeps the code resilient to
+    # quiet schema changes between seasons.
+    ID_KEYS = ("player_id", "id", "feed_id", "playerId")
+    FIRST_KEYS = ("first_name", "firstName", "firstname")
+    LAST_KEYS = ("last_name", "lastName", "lastname", "surname")
+    FULL_KEYS = ("full_name", "name", "display_name", "playerName")
+
+    def _pick(entry, keys):
+        for k in keys:
+            v = entry.get(k)
+            if v not in (None, ""):
+                return v
+        return None
+
+    lookup = {}
+    for entry in players_list:
+        if not isinstance(entry, dict):
+            continue
+        pid = _pick(entry, ID_KEYS)
+        if pid is None:
+            continue
+        # Prefer first+last to assemble the full name; fall back to a single
+        # full-name field if the split form isn't present
+        first = _pick(entry, FIRST_KEYS)
+        last = _pick(entry, LAST_KEYS)
+        if first and last:
+            full = f"{first} {last}"
+        else:
+            full = _pick(entry, FULL_KEYS)
+        key = _normalise_player_name(full)
+        if not key:
+            continue
+        # If the same normalised key appears twice (e.g. two "Will Brodie"s
+        # in the league), the first entry wins. Acceptable for our use case
+        # since the leaderboard scrape will only ever surface one of them
+        # per stat at a time.
+        lookup.setdefault(key, pid)
+
+    if not lookup:
+        return ({}, "empty")
+    return (lookup, "ok")
+
+
+def h2h_headshot_url(player_name, id_lookup):
+    """Return a CDN headshot URL for `player_name`, or None if we can't
+    resolve the player's id. Applies H2H_PLAYER_NAME_ALIASES before the
+    lookup so footywire's formal forms (Lachlan/Zachary) map to AFL
+    Fantasy's casual forms (Lachie/Zach). Pure dict lookup — cheap to
+    call per-row."""
+    if not id_lookup:
+        return None
+    # Honour the explicit alias map first; falls through unchanged if
+    # no alias is registered for this name
+    resolved_name = H2H_PLAYER_NAME_ALIASES.get(player_name, player_name)
+    pid = id_lookup.get(_normalise_player_name(resolved_name))
+    if pid is None:
+        return None
+    return _H2H_HEADSHOT_URL_TMPL.format(pid=pid)
+
+
+def build_h2h_watchlist(canonical_name, player_rankings_by_stat):
+    """For one team, pick the top N players for each watchlist stat.
+    `player_rankings_by_stat` is a dict {stat_code: {team: [(league_rank,
+    player, avg), ...]}} pre-built from cached fetches. Returns
+    {stat_code: [(league_rank, player, avg) top N]}. Stats with no players
+    for this team are still present (as empty lists) so the renderer can
+    decide whether to show them."""
+    result = {}
+    for stat_code, _label, _glyph in H2H_WATCHLIST_STATS:
+        team_data = (player_rankings_by_stat.get(stat_code) or {}).get(canonical_name, [])
+        # Page is already sorted by average DESC, so a simple slice gives top N
+        result[stat_code] = team_data[:H2H_WATCHLIST_TOP_N]
+    return result
+
+
 @st.cache_data(ttl=3600, show_spinner=False)  # 1h TTL — H2H games rarely change mid-week
 def fetch_h2h_games_for_year(year):
     """Pull all completed games for one year from Squiggle. Returns a list
@@ -3750,23 +4660,37 @@ def _h2h_tornado_row_html(stat_code, stat_label, home_val, away_val,
     )
 
 
-def render_h2h_block(home, away, rankings_data, h2h_meetings, status):
+def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
+                     home_watchlist=None, away_watchlist=None,
+                     player_id_lookup=None):
     """Render the full H2H disclosure block — a deliberately minimal closed
-    row that just says HEAD TO HEAD ANALYSIS with a chevron, expanding to reveal the
+    row that just says HEAD TO HEAD with a chevron, expanding to reveal the
     real content (W-L record banner, last-N meetings strip, season-averages
-    tornado). Returns '' (empty) when there's nothing meaningful to show,
-    so the card stays clean."""
+    tornado, and 'Ones to Watch' player leaderboards). Returns '' (empty)
+    when there's nothing meaningful to show, so the card stays clean.
+
+    `home_watchlist` and `away_watchlist` are dicts in the form
+    {stat_code: [(league_rank, player_name, average), ...]} produced by
+    build_h2h_watchlist(). `player_id_lookup` is a dict mapping normalised
+    player names to AFL Fantasy player IDs, used to construct headshot
+    image URLs. All three default to None so the function stays
+    backwards-compatible with callers that don't have those pieces."""
     home_c = canonical(home)
     away_c = canonical(away)
 
-    # If we have neither rankings NOR meetings, hide entirely — no point
-    # showing an empty disclosure that adds visual noise
+    # If we have neither rankings NOR meetings NOR a watchlist, hide
+    # entirely — no point showing an empty disclosure that adds visual noise
     home_stats = (rankings_data or {}).get(home_c, {})
     away_stats = (rankings_data or {}).get(away_c, {})
     have_rankings = bool(home_stats) and bool(away_stats)
     have_meetings = bool(h2h_meetings)
+    # Watchlist counts as "have content" only if at least one stat has at
+    # least one player for at least one team — otherwise it's empty noise
+    def _watchlist_has_any(wl):
+        return bool(wl) and any(bool(v) for v in wl.values())
+    have_watchlist = _watchlist_has_any(home_watchlist) or _watchlist_has_any(away_watchlist)
 
-    if not have_rankings and not have_meetings:
+    if not have_rankings and not have_meetings and not have_watchlist:
         return ""
 
     # Compute the home-team-perspective W-L record across the displayed
@@ -3908,6 +4832,216 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status):
             f'</div>'
         )
 
+    # ── Body: Ones to Watch — top N players for each team across the
+    # watchlist stats. Two columns (one per team), with each stat as a
+    # mini-leaderboard inside its column. Each column header carries the
+    # team's accent colour to visually anchor it.
+    if have_watchlist:
+        home_watchlist = home_watchlist or {}
+        away_watchlist = away_watchlist or {}
+
+        # ── Shared helpers (lifted from the old column builder so they can
+        # be used by the per-stat layout too) ──
+        def _player_initials(name):
+            """Build a 1-2 letter initials placeholder for the headshot
+            fallback. Takes the first letter of the first name + first
+            letter of the surname's first word (so 'Wanganeen-Milera'
+            becomes 'W' not 'WM', keeping the circle visually clean)."""
+            parts = (name or "").strip().split()
+            if not parts:
+                return "?"
+            first = parts[0][:1].upper()
+            if len(parts) >= 2:
+                last_first_segment = parts[-1].split("-")[0]
+                last = last_first_segment[:1].upper()
+                return f"{first}{last}"
+            return first
+
+        def _headshot_html(player_name):
+            """Render the headshot circle: image overlay on top of a
+            team-accented translucent disc. The disc shows through when the
+            image hasn't loaded yet (or fails), so the user never sees a
+            broken-image icon. Falls back to initials when no Fantasy id is
+            resolved."""
+            url = h2h_headshot_url(player_name, player_id_lookup)
+            initials = _player_initials(player_name)
+            if url:
+                return (
+                    f'<span class="mc-h2h-w-shot">'
+                    f'  <span class="mc-h2h-w-shot-initials">{initials}</span>'
+                    f'  <img class="mc-h2h-w-shot-img" '
+                    f'       src="{url}" '
+                    f'       alt="" '
+                    f'       loading="lazy" '
+                    f'       onerror="this.style.display=\'none\'" />'
+                    f'</span>'
+                )
+            return (
+                f'<span class="mc-h2h-w-shot mc-h2h-w-shot-fallback">'
+                f'  <span class="mc-h2h-w-shot-initials">{initials}</span>'
+                f'</span>'
+            )
+
+        def _watch_row_html(league_rank, player_name, avg, is_team_leader=False):
+            """Build one player row inside a stat block. `is_team_leader`
+            marks the highest-average player on this team for this stat —
+            CSS uses it to subtly lift their row above the rest. This is
+            independent of the league-wide medal styling on data-rank."""
+            crown_html = (
+                '<span class="mc-h2h-w-crown" aria-label="League leader">♕</span>'
+                if league_rank == 1 else ''
+            )
+            rank_attr = str(league_rank) if league_rank <= 3 else 'other'
+            leader_attr = ' data-team-leader="1"' if is_team_leader else ''
+            return (
+                f'<div class="mc-h2h-w-row" data-rank="{rank_attr}"{leader_attr}>'
+                f'  {_headshot_html(player_name)}'
+                f'  <span class="mc-h2h-w-rank">{league_rank}</span>'
+                f'  <span class="mc-h2h-w-name">{crown_html}{player_name}</span>'
+                f'  <span class="mc-h2h-w-avg">{avg:.1f}</span>'
+                f'</div>'
+            )
+
+        def _stat_side_html(team_canonical, team_accent, players, side):
+            """Render one team's side of a single stat row. `side` is
+            either 'h' (home/left, name reads to the right) or 'a'
+            (away/right, name and headshot mirror). When a team has no
+            players for this stat we show a centred dash placeholder so
+            the matchup chip in the middle still sits flush."""
+            if not players:
+                return (
+                    f'<div class="mc-h2h-w-side mc-h2h-w-side-{side} '
+                    f'            mc-h2h-w-side-empty" '
+                    f'     style="--team-accent:{team_accent};">'
+                    f'  <span class="mc-h2h-w-empty-line">No qualified players</span>'
+                    f'</div>'
+                )
+            # The team's top-rank player (by AVG, which is how footywire
+            # orders them) is the "team leader" — give them a subtle lift
+            # in the row markup so CSS can distinguish them. This is a
+            # within-team signal, complementary to the league-wide medal.
+            team_leader_idx = 0  # players are already sorted DESC by avg
+            rows_html = "".join(
+                _watch_row_html(
+                    league_rank, name, avg,
+                    is_team_leader=(idx == team_leader_idx),
+                )
+                for idx, (league_rank, name, avg) in enumerate(players)
+            )
+            return (
+                f'<div class="mc-h2h-w-side mc-h2h-w-side-{side}" '
+                f'     style="--team-accent:{team_accent};">'
+                f'  {rows_html}'
+                f'</div>'
+            )
+
+        def _matchup_chip_html(home_players, away_players, home_abbr_, away_abbr_,
+                               home_accent_, away_accent_):
+            """The centred chip between the two teams' stat blocks. Shows
+            which team's top player is ahead, and by how much. Reads at a
+            glance: 'GEE +1.3' means Geelong's leader averages 1.3 more
+            per game than Brisbane's leader in this stat. When either team
+            lacks a leader, we render a neutral 'vs' divider instead so
+            the layout stays honest about what's comparable."""
+            home_leader_avg = home_players[0][2] if home_players else None
+            away_leader_avg = away_players[0][2] if away_players else None
+            if home_leader_avg is None or away_leader_avg is None:
+                return (
+                    f'<div class="mc-h2h-w-vs mc-h2h-w-vs-neutral">'
+                    f'  <span class="mc-h2h-w-vs-line"></span>'
+                    f'  <span class="mc-h2h-w-vs-glyph">vs</span>'
+                    f'  <span class="mc-h2h-w-vs-line"></span>'
+                    f'</div>'
+                )
+            gap = home_leader_avg - away_leader_avg
+            # Dead-heat handling — exact ties are rare but possible (e.g.
+            # 32.0 vs 32.0). Show LEVEL to give it real verbal weight.
+            if abs(gap) < 0.05:
+                return (
+                    f'<div class="mc-h2h-w-vs mc-h2h-w-vs-level">'
+                    f'  <span class="mc-h2h-w-vs-line"></span>'
+                    f'  <span class="mc-h2h-w-vs-level-lbl">LEVEL</span>'
+                    f'  <span class="mc-h2h-w-vs-line"></span>'
+                    f'</div>'
+                )
+            # One side leads — colour the chip in that team's accent and
+            # show the magnitude. Triangle marker points toward winner.
+            if gap > 0:
+                winner_abbr, winner_accent = home_abbr_, home_accent_
+                marker = '◂'  # left-pointing toward home column
+                side_class = 'mc-h2h-w-vs-h'
+            else:
+                winner_abbr, winner_accent = away_abbr_, away_accent_
+                marker = '▸'  # right-pointing toward away column
+                side_class = 'mc-h2h-w-vs-a'
+            return (
+                f'<div class="mc-h2h-w-vs {side_class}" '
+                f'     style="--vs-accent:{winner_accent};">'
+                f'  <span class="mc-h2h-w-vs-marker">{marker}</span>'
+                f'  <span class="mc-h2h-w-vs-team">{winner_abbr}</span>'
+                f'  <span class="mc-h2h-w-vs-gap">+{abs(gap):.1f}</span>'
+                f'</div>'
+            )
+
+        # ── Build the stat rows ── one row per watchlist stat, each row
+        # has three cells: home side | matchup chip | away side
+        stat_rows = []
+        for stat_code, stat_label, stat_glyph in H2H_WATCHLIST_STATS:
+            home_players = home_watchlist.get(stat_code, [])
+            away_players = away_watchlist.get(stat_code, [])
+
+            # Skip stats where neither team has any data — keeps the panel
+            # tight when a stat is broadly empty (rare, but possible in
+            # early rounds)
+            if not home_players and not away_players:
+                continue
+
+            stat_rows.append(
+                f'<div class="mc-h2h-w-statrow">'
+                f'  <div class="mc-h2h-w-statrow-head">'
+                f'    <span class="mc-h2h-w-stat-glyph">{stat_glyph}</span>'
+                f'    <span class="mc-h2h-w-stat-lbl">{stat_label}</span>'
+                f'  </div>'
+                f'  <div class="mc-h2h-w-statrow-body">'
+                f'    {_stat_side_html(home_c, home_accent, home_players, "h")}'
+                f'    {_matchup_chip_html(home_players, away_players, home_abbr, away_abbr, home_accent, away_accent)}'
+                f'    {_stat_side_html(away_c, away_accent, away_players, "a")}'
+                f'  </div>'
+                f'</div>'
+            )
+
+        # Team-label header strip — sits above all the stat rows. Each
+        # team's abbreviation is anchored to their side of the layout so
+        # the user reads "BRL ... GEE" once at the top, then the stat
+        # rows below speak in shorthand.
+        teams_header = (
+            f'<div class="mc-h2h-w-teams">'
+            f'  <div class="mc-h2h-w-team-cell mc-h2h-w-team-h" '
+            f'       style="--team-accent:{home_accent};">{home_abbr}</div>'
+            f'  <div class="mc-h2h-w-team-spacer"></div>'
+            f'  <div class="mc-h2h-w-team-cell mc-h2h-w-team-a" '
+            f'       style="--team-accent:{away_accent};">{away_abbr}</div>'
+            f'</div>'
+        )
+
+        watchlist_block = (
+            f'<div class="mc-h2h-section mc-h2h-section-watch">'
+            f'  <div class="mc-h2h-watch-eyebrow">'
+            f'    <span class="mc-h2h-watch-eyebrow-line"></span>'
+            f'    <span class="mc-h2h-watch-eyebrow-glyph">★</span>'
+            f'    <span class="mc-h2h-watch-eyebrow-line"></span>'
+            f'  </div>'
+            f'  <div class="mc-h2h-watch-head">'
+            f'    <div class="mc-h2h-watch-title">Ones to Watch</div>'
+            f"    <div class=\"mc-h2h-watch-sub\">Top {H2H_WATCHLIST_TOP_N} ranked players per team &middot; season averages</div>"
+            f'  </div>'
+            f'  {teams_header}'
+            f'  <div class="mc-h2h-w-stats">{"".join(stat_rows)}</div>'
+            f'</div>'
+        )
+    else:
+        watchlist_block = ''
+
     # ── Stitch the full <details> disclosure ──
     # CLOSED STATE is deliberately stripped to its absolute minimum: just
     # the title and a chevron. All the W-L numbers, status text, icon and
@@ -3917,13 +5051,14 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status):
     return (
         f'<details class="mc-h2h-disclosure">'
         f'  <summary class="mc-h2h-summary">'
-        f'    <span class="mc-h2h-sum-title">Head to Head Analysis</span>'
+        f'    <span class="mc-h2h-sum-title">Head to Head</span>'
         f'    <span class="mc-h2h-sum-chevron">›</span>'
         f'  </summary>'
         f'  <div class="mc-h2h-body">'
         f'    {record_banner}'
         f'    {meetings_block}'
         f'    {tornado_block}'
+        f'    {watchlist_block}'
         f'  </div>'
         f'</details>'
     )
@@ -3965,6 +5100,21 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
     # so there's no need for a status banner like the team-lists feed has.
     h2h_rankings, _h2h_rankings_status = fetch_h2h_rankings()
     h2h_game_pool = fetch_h2h_game_pool()
+
+    # Pull the ranked player leaderboard for each watchlist stat once per
+    # render. Each call is cached so subsequent renders are free; the
+    # underlying scrapes happen during the loading-overlay phase in main().
+    # Stored as a single nested dict {stat_code: {team_canonical: [players]}}
+    # so the per-card render only does cheap lookups.
+    h2h_player_rankings = {}
+    for stat_code, _stat_label, _glyph in H2H_WATCHLIST_STATS:
+        data, _status = fetch_h2h_player_rankings(stat_code)
+        h2h_player_rankings[stat_code] = data
+
+    # Player ID → headshot URL lookup, pulled once and shared across every
+    # card. Falls back to {} on any error, in which case the headshot CSS
+    # placeholder shows the player's initials instead — no broken images.
+    h2h_player_id_lookup, _h2h_player_id_status = fetch_h2h_player_id_lookup()
 
     # Surface a single round-wide status banner ONLY for actionable failures.
     # The "ok" / "empty" cases are silent — per-card disclaimers handle those.
@@ -4202,12 +5352,20 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
                     )
 
         # Build this game's H2H block — last 5 meetings filtered from the
-        # shared pool, plus tornado rows from the season-averages rankings.
-        # Returns '' (empty string) when both data sources are unavailable
+        # shared pool, plus tornado rows from the season-averages rankings,
+        # plus a "Ones to Watch" panel of top-ranked players per team.
+        # Returns '' (empty string) when all data sources are unavailable
         # so the card stays clean instead of showing a broken disclosure.
         h2h_meetings_for_game = build_h2h_meetings(home, away, h2h_game_pool)
+        # Cheap dict lookups — the heavy scraping was already done during
+        # the loading overlay and is now sitting in @st.cache_data
+        home_watchlist = build_h2h_watchlist(canonical(home), h2h_player_rankings)
+        away_watchlist = build_h2h_watchlist(canonical(away), h2h_player_rankings)
         h2h_block_html = render_h2h_block(
-            home, away, h2h_rankings, h2h_meetings_for_game, _h2h_rankings_status
+            home, away, h2h_rankings, h2h_meetings_for_game,
+            _h2h_rankings_status,
+            home_watchlist, away_watchlist,
+            h2h_player_id_lookup,
         )
 
         st.markdown(_h(f"""
@@ -4369,6 +5527,247 @@ def render_round_edge(games, predictions_by_id, standings_lookup=None):
       <div class="edge-cards">{cards}</div>
     </div>
     """), unsafe_allow_html=True)
+
+# ════════════════════════════════════════════════════════════════════════════
+# RENDER: PERFORMANCE KPI STRIP — Bloomberg-style 3-block headline metrics
+# ════════════════════════════════════════════════════════════════════════════
+# Three large stat blocks that anchor the top of the Performance tab. Each
+# block has the Bloomberg-terminal pattern: tiny ALL-CAPS eyebrow label,
+# enormous tabular figure, supporting delta beneath. The figures are real
+# (pulled from the tracker) so the user reads receipts, not vibes. Designed
+# to be the first thing a sceptical visitor sees — "you're backed by data,
+# here's exactly how much".
+
+def render_performance_kpi_strip(tracker):
+    """Render the three headline KPI blocks: Strike Rate, Margin Precision,
+    Confidence Edge. Each block carries a directional delta showing how
+    we're trending against our own baseline (recent form vs full season).
+    Bails out silently if the tracker is empty — main() already shows an
+    empty-state when that's true."""
+    if not tracker:
+        return
+
+    # Flatten all games across all rounds — the universal sample
+    all_games = [g for r in tracker for g in r["games"]]
+    n_total = len(all_games)
+    if n_total == 0:
+        return
+
+    # ── Sample-size guards ──
+    # These thresholds keep the headline numbers honest. A 5pp jump on 6
+    # recent games is statistical noise; we'd rather show "awaiting
+    # baseline" than mislead someone shopping our model in early rounds.
+    MIN_GAMES_FOR_SR_DELTA  = 15   # ~2 rounds of fixtures
+    MIN_GAMES_FOR_MAE_DELTA = 12   # margin tips are a subset, so lower bar
+    MIN_HC_TIPS_FOR_EDGE    = 12   # confidence edge needs real sample too
+
+    # ── KPI 1: STRIKE RATE ──
+    # Season hit rate, plus a delta vs the OLDER portion of the season. We
+    # compare the most-recent third against the rest because trailing form
+    # is what punters care about — "are you getting hotter or colder?"
+    # not "what's your June average". Round-based split rather than
+    # game-based so a low-game finals round doesn't dilute the signal.
+    n_correct = sum(1 for g in all_games if g["correct"])
+    strike_rate = (n_correct / n_total * 100)
+    cutoff = max(1, int(len(tracker) * 2 / 3))  # last ~1/3 of rounds
+    recent_rounds = tracker[cutoff:]
+    older_rounds = tracker[:cutoff]
+    recent_games = [g for r in recent_rounds for g in r["games"]]
+    older_games  = [g for r in older_rounds  for g in r["games"]]
+
+    # Delta only computed when BOTH sides have enough sample to be honest.
+    # A 5pp swing on 6 games is noise; on 20 it's a real signal.
+    if (len(recent_games) >= MIN_GAMES_FOR_SR_DELTA
+            and len(older_games) >= MIN_GAMES_FOR_SR_DELTA):
+        recent_rate = sum(1 for g in recent_games if g["correct"]) / len(recent_games) * 100
+        older_rate  = sum(1 for g in older_games  if g["correct"]) / len(older_games)  * 100
+        sr_delta = recent_rate - older_rate
+    else:
+        sr_delta = None
+
+    # ── KPI 2: MARGIN PRECISION ──
+    # Mean absolute error in points. The underlying field is the same
+    # absolute error the round-ledger margin scorecard uses — see
+    # get_tracker(): margin_error = abs(tip_margin - actual_margin_signed),
+    # where actual_margin_signed is the realised margin from the tipped
+    # team's perspective. So MAE here is identical to MAE in the scorecard
+    # by construction — no divergence between the two surfaces.
+    #
+    # LOWER is better, so the delta needs to invert visually: a falling
+    # MAE is GOOD news (renders as a green ▼). Direction='up_bad' in
+    # _delta_html does that flip. This is the KPI that separates a
+    # calibrated model from a lucky coin-flip — anyone can pick winners
+    # over a small sample, only a real model gets the margins right.
+    margin_games = [g for g in all_games if g.get("margin_error") is not None]
+    if margin_games:
+        mae = sum(g["margin_error"] for g in margin_games) / len(margin_games)
+        recent_margin = [g for r in recent_rounds for g in r["games"] if g.get("margin_error") is not None]
+        older_margin  = [g for r in older_rounds  for g in r["games"] if g.get("margin_error") is not None]
+        # Same sample-size discipline as strike rate, sized for the
+        # smaller margin sub-sample (some games may lack actual scores).
+        if (len(recent_margin) >= MIN_GAMES_FOR_MAE_DELTA
+                and len(older_margin) >= MIN_GAMES_FOR_MAE_DELTA):
+            recent_mae = sum(g["margin_error"] for g in recent_margin) / len(recent_margin)
+            older_mae  = sum(g["margin_error"] for g in older_margin)  / len(older_margin)
+            mae_delta = recent_mae - older_mae  # NEGATIVE = improving
+        else:
+            mae_delta = None
+    else:
+        mae = None
+        mae_delta = None
+
+    # ── KPI 3: CONFIDENCE EDGE ──
+    # Hit rate on our HIGH-CONFIDENCE picks (≥70% conf) minus the season
+    # hit rate. A positive edge proves the confidence signal is doing
+    # real work — when we say we're sure, we really are more accurate.
+    # This is the "we know what we don't know" KPI; it separates a
+    # calibrated model from one that's just confidently wrong.
+    #
+    # Same sample-size guard: we don't show an edge until there's enough
+    # high-conf sample to mean something. With <12 HC tips, the edge can
+    # swing ±10pp purely on chance.
+    high_conf_games = [g for g in all_games if (g.get("confidence") or 0) >= 70]
+    if high_conf_games and len(high_conf_games) >= MIN_HC_TIPS_FOR_EDGE:
+        hc_rate = sum(1 for g in high_conf_games if g["correct"]) / len(high_conf_games) * 100
+        edge = hc_rate - strike_rate
+    else:
+        # Surface the raw HC count even when sub-threshold, so the user
+        # can see we're not hiding it — just being honest about sample.
+        hc_rate = (sum(1 for g in high_conf_games if g["correct"]) / len(high_conf_games) * 100) if high_conf_games else None
+        edge = None
+
+    # ── Helper: render the delta line beneath each figure ──
+    # Single shape regardless of metric so the strip reads consistently.
+    # `direction` is 'up_good' / 'up_bad' / 'flat' which lets MAE flip
+    # its colour (lower is better) without complicating the caller.
+    def _delta_html(delta_val, suffix, direction='up_good', threshold=0.5):
+        """Build a single delta line: arrow + magnitude + comparison label.
+        direction='up_good' → positive delta is green, negative is red
+        direction='up_bad'  → positive delta is red,   negative is green (for MAE)
+        threshold filters out micro-movements so we don't trumpet noise."""
+        if delta_val is None:
+            return '<div class="pkpi-delta pkpi-delta-neutral"><span class="pkpi-delta-arrow">·</span><span class="pkpi-delta-lbl">awaiting baseline</span></div>'
+        if abs(delta_val) < threshold:
+            return f'<div class="pkpi-delta pkpi-delta-flat"><span class="pkpi-delta-arrow">●</span><span class="pkpi-delta-val">{abs(delta_val):.1f}{suffix}</span><span class="pkpi-delta-lbl">vs prior rounds</span></div>'
+        # Pick arrow + colour class based on (direction, sign)
+        is_positive_move = delta_val > 0
+        if direction == 'up_good':
+            tone = 'pkpi-delta-up' if is_positive_move else 'pkpi-delta-dn'
+            arrow = '▲' if is_positive_move else '▼'
+        else:  # up_bad — for MAE-style "lower is better"
+            tone = 'pkpi-delta-dn' if is_positive_move else 'pkpi-delta-up'
+            arrow = '▲' if is_positive_move else '▼'
+        return (
+            f'<div class="pkpi-delta {tone}">'
+            f'  <span class="pkpi-delta-arrow">{arrow}</span>'
+            f'  <span class="pkpi-delta-val">{abs(delta_val):.1f}{suffix}</span>'
+            f'  <span class="pkpi-delta-lbl">vs prior rounds</span>'
+            f'</div>'
+        )
+
+    # ── Block builders ──
+    # Strike Rate
+    sr_value_html = (
+        f'<span class="pkpi-figure">{strike_rate:.1f}<span class="pkpi-unit">%</span></span>'
+    )
+    sr_block = (
+        f'<div class="pkpi-block">'
+        f'  <div class="pkpi-eyebrow">'
+        f'    <span class="pkpi-eyebrow-glyph">◆</span>'
+        f'    <span class="pkpi-eyebrow-lbl">Strike Rate</span>'
+        f'  </div>'
+        f'  {sr_value_html}'
+        f'  <div class="pkpi-sub">{n_correct} of {n_total} tips correct</div>'
+        f'  {_delta_html(sr_delta, "pp", direction="up_good", threshold=1.5)}'
+        f'</div>'
+    )
+
+    # Margin Precision
+    if mae is not None:
+        mp_value_html = (
+            f'<span class="pkpi-figure">{mae:.1f}<span class="pkpi-unit">pts</span></span>'
+        )
+        mp_block = (
+            f'<div class="pkpi-block">'
+            f'  <div class="pkpi-eyebrow">'
+            f'    <span class="pkpi-eyebrow-glyph">▲</span>'
+            f'    <span class="pkpi-eyebrow-lbl">Margin Precision</span>'
+            f'  </div>'
+            f'  {mp_value_html}'
+            f'  <div class="pkpi-sub">mean absolute error · {len(margin_games)} tips</div>'
+            f'  {_delta_html(mae_delta, "pts", direction="up_bad", threshold=1.0)}'
+            f'</div>'
+        )
+    else:
+        mp_block = (
+            f'<div class="pkpi-block pkpi-block-empty">'
+            f'  <div class="pkpi-eyebrow">'
+            f'    <span class="pkpi-eyebrow-glyph">▲</span>'
+            f'    <span class="pkpi-eyebrow-lbl">Margin Precision</span>'
+            f'  </div>'
+            f'  <span class="pkpi-figure pkpi-figure-empty">—</span>'
+            f'  <div class="pkpi-sub">awaiting margin data</div>'
+            f'</div>'
+        )
+
+    # Confidence Edge
+    if edge is not None:
+        ce_value_html = (
+            f'<span class="pkpi-figure">{"+" if edge >= 0 else "−"}{abs(edge):.1f}<span class="pkpi-unit">pp</span></span>'
+        )
+        ce_block = (
+            f'<div class="pkpi-block">'
+            f'  <div class="pkpi-eyebrow">'
+            f'    <span class="pkpi-eyebrow-glyph">⌬</span>'
+            f'    <span class="pkpi-eyebrow-lbl">Confidence Edge</span>'
+            f'  </div>'
+            f'  {ce_value_html}'
+            f'  <div class="pkpi-sub">high-conf hit rate · {hc_rate:.1f}% on {len(high_conf_games)} tips</div>'
+            f'  <div class="pkpi-delta pkpi-delta-static"><span class="pkpi-delta-arrow">◇</span><span class="pkpi-delta-lbl">above season avg of {strike_rate:.1f}%</span></div>'
+            f'</div>'
+        )
+    else:
+        # Sub-threshold branch: if we have SOME high-conf tips but not
+        # enough to claim a reliable edge, show the raw figure with an
+        # explicit "small sample" caveat. Honesty earns trust; hiding
+        # the number entirely would feel like we're concealing it.
+        if hc_rate is not None and high_conf_games:
+            ce_block = (
+                f'<div class="pkpi-block pkpi-block-empty">'
+                f'  <div class="pkpi-eyebrow">'
+                f'    <span class="pkpi-eyebrow-glyph">⌬</span>'
+                f'    <span class="pkpi-eyebrow-lbl">Confidence Edge</span>'
+                f'  </div>'
+                f'  <span class="pkpi-figure">{hc_rate:.1f}<span class="pkpi-unit">%</span></span>'
+                f'  <div class="pkpi-sub">high-conf hit rate · {len(high_conf_games)} tips</div>'
+                f'  <div class="pkpi-delta pkpi-delta-neutral">'
+                f'    <span class="pkpi-delta-arrow">·</span>'
+                f'    <span class="pkpi-delta-lbl">small sample · {MIN_HC_TIPS_FOR_EDGE} tips needed for edge claim</span>'
+                f'  </div>'
+                f'</div>'
+            )
+        else:
+            ce_block = (
+                f'<div class="pkpi-block pkpi-block-empty">'
+                f'  <div class="pkpi-eyebrow">'
+                f'    <span class="pkpi-eyebrow-glyph">⌬</span>'
+                f'    <span class="pkpi-eyebrow-lbl">Confidence Edge</span>'
+                f'  </div>'
+                f'  <span class="pkpi-figure pkpi-figure-empty">—</span>'
+                f'  <div class="pkpi-sub">awaiting high-confidence sample</div>'
+                f'</div>'
+            )
+
+    st.markdown(_h(f"""
+    <div class="pkpi-strip">
+      {sr_block}
+      <div class="pkpi-divider"></div>
+      {mp_block}
+      <div class="pkpi-divider"></div>
+      {ce_block}
+    </div>
+    """), unsafe_allow_html=True)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # RENDER: TRUST BRACKETS (punter-friendly calibration)
@@ -7694,6 +9093,255 @@ st.markdown("""
     text-transform:uppercase;
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+   PERFORMANCE TAB PREMIUM POLISH
+   Restructured around Bloomberg-terminal hierarchy: real numbers in the
+   banner, big KPI strip below, then editorial sections separated by thin
+   ruled dividers. The goal is "data IS the badge" — no decorative seals,
+   no fake verification ribbons, just figures and their context.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* The premium variant of the perf-feed banner — adds a separator and a
+   real headline stat (strike rate) baked into the left side. Inherits
+   everything else from .perf-feed so it stays visually consistent with
+   the rest of the green-accented Performance scope. */
+.perf-feed-premium .perf-feed-l{
+    gap:11px;
+}
+.perf-feed-sep{
+    color:var(--border3);
+    opacity:0.7;
+    font-weight:300;
+    font-size:0.7rem;
+    line-height:1;
+}
+.perf-feed-stat{
+    font-size:0.66rem;
+    font-weight:800;
+    letter-spacing:0.14em;
+    color:var(--green);
+    text-transform:uppercase;
+    text-shadow:0 0 8px rgba(52,211,153,0.4);
+    font-variant-numeric:tabular-nums;
+}
+
+/* ── KPI STRIP — three Bloomberg blocks ────────────────────────────────
+   Bloomberg cues that earn their place here:
+     • Tiny ALL-CAPS eyebrow label above the figure
+     • Enormous tabular figure (tabular-nums + tight letter-spacing)
+     • Sub-line in muted text for context (n tips, mean error, etc.)
+     • Delta line at the bottom: arrow + magnitude + comparison label
+     • Thin vertical dividers between blocks (1px, gradient-faded)
+   Generous breathing room around each figure so the eye can rest on
+   the data; no decorative chrome. */
+.pkpi-strip{
+    margin:14px 14px 0;
+    display:grid;
+    grid-template-columns:1fr 1px 1fr 1px 1fr;
+    align-items:stretch;
+    padding:18px 0;
+    background:linear-gradient(180deg,
+        rgba(52,211,153,0.025) 0%,
+        rgba(52,211,153,0.008) 100%);
+    border:1px solid rgba(52,211,153,0.16);
+    border-radius:10px;
+    position:relative;
+    overflow:hidden;
+    animation:fadeUp 0.6s ease both;
+    animation-delay:0.05s;
+}
+.pkpi-strip::before{
+    /* Faint top-edge accent — same idiom as .perf-feed */
+    content:'';
+    position:absolute;
+    top:0; left:0; right:0;
+    height:1px;
+    background:linear-gradient(90deg,transparent,rgba(52,211,153,0.45),transparent);
+}
+.pkpi-divider{
+    background:linear-gradient(180deg,
+        transparent,
+        rgba(52,211,153,0.18) 30%,
+        rgba(52,211,153,0.18) 70%,
+        transparent);
+}
+
+.pkpi-block{
+    padding:6px 22px 4px;
+    display:flex; flex-direction:column;
+    align-items:flex-start;
+    gap:4px;
+    font-family:var(--mono);
+    position:relative;
+}
+.pkpi-block-empty{
+    opacity:0.6;
+}
+
+/* Eyebrow — tiny label that sits above the figure */
+.pkpi-eyebrow{
+    display:flex; align-items:center;
+    gap:6px;
+    margin-bottom:2px;
+}
+.pkpi-eyebrow-glyph{
+    color:var(--green);
+    font-size:0.55rem;
+    line-height:1;
+    opacity:0.85;
+    text-shadow:0 0 4px rgba(52,211,153,0.5);
+}
+.pkpi-eyebrow-lbl{
+    font-size:0.5rem;
+    font-weight:800;
+    letter-spacing:0.18em;
+    color:var(--text2);
+    text-transform:uppercase;
+    line-height:1;
+}
+
+/* The figure — the hero of each block. Big, tabular, tight. */
+.pkpi-figure{
+    font-size:2.2rem;
+    font-weight:800;
+    color:var(--white);
+    line-height:1;
+    letter-spacing:-0.035em;
+    font-variant-numeric:tabular-nums;
+    text-shadow:0 0 14px rgba(255,255,255,0.08);
+    margin:1px 0 0;
+}
+.pkpi-unit{
+    font-size:0.72rem;
+    font-weight:700;
+    color:var(--text2);
+    letter-spacing:0.04em;
+    margin-left:3px;
+    vertical-align:0.45em;
+}
+.pkpi-figure-empty{
+    color:var(--text3);
+    opacity:0.5;
+    letter-spacing:0;
+}
+
+/* Sub-line — quiet context below the figure */
+.pkpi-sub{
+    font-size:0.46rem;
+    font-weight:600;
+    letter-spacing:0.08em;
+    color:var(--text3);
+    text-transform:uppercase;
+    line-height:1.3;
+    margin-bottom:2px;
+}
+
+/* Delta line — arrow + magnitude + comparison.
+   pkpi-delta-up    → positive trend (green)
+   pkpi-delta-dn    → negative trend (red)
+   pkpi-delta-flat  → moved <threshold (neutral grey)
+   pkpi-delta-neutral → no baseline yet (very quiet)
+   pkpi-delta-static → not actually a delta, a context line (e.g. "above season avg") */
+.pkpi-delta{
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    margin-top:3px;
+    padding:3px 8px;
+    border-radius:3px;
+    font-size:0.46rem;
+    font-weight:700;
+    letter-spacing:0.06em;
+    text-transform:uppercase;
+    font-family:var(--mono);
+    line-height:1.2;
+}
+.pkpi-delta-arrow{
+    font-size:0.6rem;
+    line-height:1;
+    font-weight:700;
+}
+.pkpi-delta-val{
+    font-variant-numeric:tabular-nums;
+    font-weight:800;
+    letter-spacing:0.02em;
+}
+.pkpi-delta-lbl{
+    font-weight:600;
+    opacity:0.75;
+}
+.pkpi-delta-up{
+    color:var(--green);
+    background:rgba(52,211,153,0.08);
+    border:1px solid rgba(52,211,153,0.22);
+}
+.pkpi-delta-dn{
+    color:var(--red);
+    background:rgba(239,68,68,0.06);
+    border:1px solid rgba(239,68,68,0.20);
+}
+.pkpi-delta-flat{
+    color:var(--text2);
+    background:rgba(255,255,255,0.03);
+    border:1px solid var(--border2);
+}
+.pkpi-delta-neutral{
+    color:var(--text3);
+    background:transparent;
+    border:1px solid transparent;
+    opacity:0.6;
+    padding-left:0;
+    padding-right:0;
+}
+.pkpi-delta-static{
+    color:var(--accent);
+    background:rgba(79,143,255,0.06);
+    border:1px solid rgba(79,143,255,0.20);
+}
+
+/* ── EDITORIAL SECTION DIVIDERS — premium polish on existing sc-divider ──
+   The default sc-divider works fine; perf-section-divider just lifts the
+   label weight and tightens the vertical rhythm so consecutive sections
+   feel like chapters rather than fences. */
+.perf-section-divider{
+    margin-top:22px !important;
+    margin-bottom:8px !important;
+}
+.perf-section-divider .sc-divider-label{
+    font-size:0.66rem !important;
+    font-weight:800 !important;
+    letter-spacing:0.2em !important;
+}
+
+/* ── MOBILE — stack the KPI blocks vertically on phone-width screens ── */
+@media (max-width:640px){
+    .pkpi-strip{
+        grid-template-columns:1fr;
+        padding:14px 0 12px;
+    }
+    .pkpi-divider{
+        height:1px;
+        width:100%;
+        background:linear-gradient(90deg,
+            transparent,
+            rgba(52,211,153,0.18) 20%,
+            rgba(52,211,153,0.18) 80%,
+            transparent);
+    }
+    .pkpi-block{
+        padding:12px 18px 6px;
+    }
+    .pkpi-figure{font-size:1.85rem;}
+    .pkpi-unit{font-size:0.62rem;}
+    .perf-feed-premium .perf-feed-l{
+        flex-wrap:wrap;
+        gap:6px 9px;
+    }
+    .perf-feed-stat{
+        font-size:0.58rem;
+    }
+}
+
 /* Count-up integer counters using @property — work the same way the loading
    bar percentage works. Each number has its own typed integer that animates
    from 0 → target on first render, smoothly. */
@@ -8508,11 +10156,22 @@ st.markdown("""
     100%{content:"100%";}
 }
 
-/* 20-second variants for the refresh-button ceremony.
-   More linear progression — steady tick across 20s feels honest.
-   The shimmer keeps looping at the same speed so the bar still feels alive. */
+/* 26-second variants for the refresh-button ceremony.
+   More linear progression — steady tick across 26s feels honest.
+   The shimmer keeps looping at the same speed so the bar still feels alive.
+
+   Timer architecture (post-fix): there are TWO timers running together —
+     • Browser-side (this CSS bar + the JS counter): both run for 26s
+     • Server-side (PYTHON_OVERLAY_FLOOR in main()): runs for 22s
+   This is INTENTIONAL. Python drops the overlay at 22s while the visual
+   bar is at ~84%. Bar disappears with overlay, page reveals. Avoids the
+   "frozen at 100%" pause that used to happen while Streamlit's WebSocket
+   roundtrip + rerun overhead caught up. The browser timers stay at 26s
+   so the bar paints smoothly even on slow connections.
+   Keep this CSS 26s and the JS `duration` constant in main() at 26000ms
+   in sync — they're both browser-side animations of the same ceremony. */
 .load-bar-fill-slow{
-    animation:load-bar-advance-slow 20s linear forwards!important;
+    animation:load-bar-advance-slow 26s linear forwards!important;
 }
 @keyframes load-bar-advance-slow{
     0%   {width:0%;}
@@ -8624,7 +10283,7 @@ def main():
             <script>
             (function(){
                 const start = Date.now();
-                const duration = 20000;
+                const duration = 26000;
                 let target = null;
                 let attempts = 0;
                 const findAndStart = () => {
@@ -8650,8 +10309,23 @@ def main():
             height=0,
         )
 
-        # Target a 20-second total ceremony — pad with sleep if the fetch is faster.
-        TARGET_DURATION = 30.0
+        # Two related timers run during the loading ceremony:
+        #   1. JS counter (above, 26000ms) — paints the percentage and bar
+        #      fill animation locally in the browser
+        #   2. Python sleep pad (below) — keeps the overlay in place at
+        #      least PYTHON_OVERLAY_FLOOR seconds so the ceremony feels
+        #      premium even on cached fetches
+        # We deliberately set the Python floor *lower* than the JS duration.
+        # The reason: when both ran for 26s, the user perceived a 3-4 second
+        # freeze at 100% before the page appeared — that's the Streamlit
+        # WebSocket roundtrip + rerun overhead between sleep returning and
+        # the DOM actually updating. By dropping the overlay 4 seconds
+        # earlier (while the visual bar is at ~84%), the overlay-removal
+        # happens mid-animation. The bar disappears with the overlay, the
+        # page appears, and the user perceives a snappy efficient unlock
+        # rather than a stuck loader.
+        PYTHON_OVERLAY_FLOOR = 22.0   # how long Python guarantees the overlay stays up
+        JS_COUNTER_DURATION  = 26.0   # how long the JS bar fill animation runs for
         fetch_start = time.time()
 
     with st.spinner(""):
@@ -8664,14 +10338,39 @@ def main():
             tracker = get_tracker(year, rnd, sources)
             standings_lookup = build_standings_lookup(get_standings(year))
             all_season_games = get_all_games(year)
+
+            # Warm the H2H caches NOW (during the loading overlay) so that when
+            # render_tips() later calls these functions, they hit Streamlit's
+            # cache instantly instead of forcing the user to stare at a blank
+            # page while footywire and 5 years of Squiggle games stream in.
+            # Wrapped in its own try so a footywire outage can't bring the
+            # whole app down — render_h2h_block handles missing data gracefully.
+            try:
+                fetch_h2h_rankings()
+                fetch_h2h_game_pool()
+                # Warm the player-rankings cache too — one scrape per
+                # watchlist stat. Loop iterates over H2H_WATCHLIST_STATS so
+                # adding a new stat to that constant automatically gets warmed
+                # here without any other changes needed.
+                for _stat_code, _stat_label, _glyph in H2H_WATCHLIST_STATS:
+                    fetch_h2h_player_rankings(_stat_code)
+                # Warm the AFL Fantasy player_id lookup so headshots in the
+                # Ones-to-Watch panel are ready to render the moment the
+                # disclosure is expanded. This is a single ~1MB JSON fetch
+                # cached for 24h so it's cheap on subsequent renders.
+                fetch_h2h_player_id_lookup()
+            except Exception:
+                pass
         except Exception as e:
             st.error(f"Failed to load: {e}")
             return
 
     if show_overlay and overlay_placeholder is not None:
-        # Pad the fetch to match the 20s bar so the user sees the ceremony complete.
+        # Pad the fetch up to the Python floor so the ceremony lands.
+        # The JS bar will keep running locally for a few more seconds, but
+        # the overlay drops here — bar disappears with it, page reveals.
         elapsed = time.time() - fetch_start if fetch_start else 0
-        remaining = TARGET_DURATION - elapsed
+        remaining = PYTHON_OVERLAY_FLOOR - elapsed
         if remaining > 0:
             time.sleep(remaining)
         # Now clear the overlay — its placeholder is replaced with nothing,
@@ -8943,7 +10642,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["This Round", "Intelligence", "Performance"])
+    tab1, tab2 = st.tabs(["This Round", "Performance"])
 
     with tab1:
         # ── Round Pulse — round-specific context, lives inside the tab now
@@ -9033,70 +10732,73 @@ def main():
             st.info("No tips available yet.")
 
     with tab2:
-        # INTELLIGENCE — narrative + analytics. Designed to feel live and
-        # state-of-the-art. The hero banner pulses with a "FEED LIVE" indicator.
+        # ── PERFORMANCE — the receipts, the rhythm, the receipts again ──
+        # Restructured around a Bloomberg-style information hierarchy:
+        #   1. Premium banner with the headline number (strike rate) baked in
+        #   2. KPI strip — three big tabular figures with deltas, the
+        #      "we know our shit" anchor that frames everything below
+        #   3. Four editorial sections, ordered most-glanceable first:
+        #        a. MARKET POSITIONING & TIMING — fav vs dog + day of week
+        #           (the most interesting analytical splits — answers
+        #           "when does this model have an edge?")
+        #        b. SEASON RHYTHM — streak/form summary
+        #        c. CONFIDENCE LADDER — trust brackets (calibration proof)
+        #        d. ROUND LEDGER — the granular receipts (scorecards)
         if tracker:
-            st.markdown('<div class="intel-scope">', unsafe_allow_html=True)
-            st.markdown(_h(f"""
-            <div class="intel-feed">
-              <div class="intel-feed-l">
-                <span class="intel-feed-glow"></span>
-                <span class="intel-feed-glow intel-feed-glow-2"></span>
-                <span class="intel-feed-lbl">INTELLIGENCE FEED · LIVE</span>
-              </div>
-              <div class="intel-feed-r">
-                <span class="intel-feed-meta">RECALCULATED <span class="intel-feed-time">JUST NOW</span></span>
-              </div>
-            </div>
-            """), unsafe_allow_html=True)
+            # Compute the headline metric inline so the banner shows real
+            # numbers, not just "VERIFIED" decoration. Bloomberg-style: the
+            # data IS the badge.
+            _all_games = [g for r in tracker for g in r["games"]]
+            _n_total = len(_all_games)
+            _n_correct = sum(1 for g in _all_games if g["correct"])
+            _sr = (_n_correct / _n_total * 100) if _n_total else 0
 
-            # Season Rhythm — promoted to first position under the FEED LIVE banner.
-            # It's the most glanceable summary; deserves prime real estate.
-            render_rhythm(tracker)
-
-            st.markdown('<div class="sc-divider"><span class="sc-divider-label">Season Narrative</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
-            render_highlights(tracker)
-            render_round_awards(tracker)
-
-            st.markdown('<div class="sc-divider"><span class="sc-divider-label">Team Intelligence</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
-            render_team_intel(tracker)
-
-            st.markdown('<div class="sc-divider"><span class="sc-divider-label">Where We Slipped</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
-            render_slipped(tracker)
-
-            st.markdown('<div class="sc-divider"><span class="sc-divider-label">Deeper Analytics</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
-            render_split_analytics(tracker)
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(_h("""
-            <div class="empty-state empty-intel">
-              <div class="empty-glyph">⌬</div>
-              <div class="empty-headline">INTELLIGENCE FEED · INITIALISING</div>
-              <div class="empty-body">Awaiting first completed round. Models warm up once results land.</div>
-              <div class="empty-bar"><div class="empty-bar-fill"></div></div>
-            </div>
-            """), unsafe_allow_html=True)
-
-    with tab3:
-        # OUR PERFORMANCE — the receipts. Cold, hard, factual track record.
-        if tracker:
             st.markdown('<div class="perf-scope">', unsafe_allow_html=True)
             st.markdown(_h(f"""
-            <div class="perf-feed">
+            <div class="perf-feed perf-feed-premium">
               <div class="perf-feed-l">
                 <span class="perf-feed-glyph">◆</span>
-                <span class="perf-feed-lbl">PERFORMANCE LEDGER · VERIFIED</span>
+                <span class="perf-feed-lbl">PERFORMANCE LEDGER</span>
+                <span class="perf-feed-sep">·</span>
+                <span class="perf-feed-stat">{_sr:.1f}% STRIKE RATE</span>
               </div>
               <div class="perf-feed-r">
-                <span class="perf-feed-meta">{sum(len(r["games"]) for r in tracker)} TIPS · YEAR-TO-DATE</span>
+                <span class="perf-feed-meta">{_n_total} TIPS · {len(tracker)} ROUNDS · YTD</span>
               </div>
             </div>
             """), unsafe_allow_html=True)
 
-            st.markdown('<div class="sc-divider"><span class="sc-divider-label">Betting Guidance</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
+            # ── 1) HEADLINE KPI STRIP ── the three Bloomberg blocks
+            render_performance_kpi_strip(tracker)
+
+            # ── 2) MARKET POSITIONING & TIMING ──
+            # Where we have an edge: betting category (favs vs dogs) and
+            # weekday rhythm. Putting this first puts the analytical
+            # answer — "this is when/where the model works" — above the
+            # raw track record. Sales angle: leads with the proof, not
+            # the totals.
+            st.markdown('<div class="sc-divider perf-section-divider"><span class="sc-divider-label">Market Positioning &amp; Timing</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
+            render_split_analytics(tracker)
+
+            # ── 3) SEASON RHYTHM ──
+            # Promoted from old Intelligence tab. The streak/form chart
+            # is the most glanceable narrative artefact — shows momentum.
+            st.markdown('<div class="sc-divider perf-section-divider"><span class="sc-divider-label">Season Rhythm</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
+            render_rhythm(tracker)
+
+            # ── 4) CONFIDENCE LADDER ──
+            # Trust brackets — the calibration proof. "When we say we're
+            # this sure, here's what we deliver." This is the technical
+            # honesty section and pairs naturally with the Confidence
+            # Edge KPI from the strip above.
+            st.markdown('<div class="sc-divider perf-section-divider"><span class="sc-divider-label">Confidence Ladder</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
             render_trust_brackets(tracker)
 
-            st.markdown('<div class="sc-divider"><span class="sc-divider-label">Round-by-Round Grids</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
+            # ── 5) ROUND LEDGER ──
+            # The granular receipts. Two scorecards: tip accuracy + margin.
+            # Last because they're the deep-dive; everything above sets the
+            # context for what these grids show.
+            st.markdown('<div class="sc-divider perf-section-divider"><span class="sc-divider-label">Round Ledger</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
             render_scorecard(tracker)
             render_margin_scorecard(tracker)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -9158,5 +10860,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 

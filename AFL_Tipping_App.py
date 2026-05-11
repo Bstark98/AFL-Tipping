@@ -206,6 +206,8 @@ H2H_PLAYER_NAME_ALIASES = {
     "Lachlan Ash":      "Lachie Ash",
     "Zachary Merrett":  "Zach Merrett",
     "Thomas Stewart":   "Tom Stewart",
+    "Samuel Collins":   "Sam Collins",
+    "Lachlan Jones":    "Lachie Jones",
 }
 
 # Stat codes pulled from the rankings page — each maps a column header to
@@ -1277,7 +1279,7 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .sc-title{font-size:0.62rem;font-weight:700;letter-spacing:0.14em;color:var(--white);text-transform:uppercase;display:flex;align-items:center;gap:6px;}
 .sc-title::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--aglow);}
 .sc-hint{font-size:0.54rem;color:var(--text2);letter-spacing:0.04em;}
-.sc-body{padding:12px;overflow-x:auto;}
+.sc-body{padding:12px;overflow-x:auto;display:flex;justify-content:safe center;}
 .sc-table{display:flex;flex-direction:column;gap:3px;min-width:fit-content;}
 .sc-row{display:flex;align-items:center;gap:3px;}
 .sc-rl{width:42px;font-size:0.52rem;font-weight:700;color:var(--text2);text-align:right;padding-right:8px;flex-shrink:0;letter-spacing:0.08em;text-transform:uppercase;}
@@ -1306,7 +1308,12 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .jump-live{
     position:fixed;
     right:16px;
-    bottom:max(24px, env(safe-area-inset-bottom, 24px));
+    /* Lifted from bottom:24px to clear the persistent terminal status
+       bar (which lives at the viewport bottom at 30px tall). The button
+       now floats above the status bar with 4px breathing room. The
+       env(safe-area-inset-bottom) clause handles iPhones with home
+       indicators by stacking the inset on top of the bar clearance. */
+    bottom:max(40px, calc(env(safe-area-inset-bottom, 0px) + 34px));
     z-index:90;
     display:inline-flex;
     align-items:center;
@@ -2024,7 +2031,11 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
     color-mix(in srgb, var(--team-accent) 2%, var(--card)) 100%);
   border:1px solid color-mix(in srgb, var(--team-accent) 20%, var(--border2));
   border-radius:6px;
-  min-height:60px;
+  /* min-height grew with the bigger headshots — 3 rows × ~42px + gaps
+     + padding ≈ 155px. We set it slightly lower so single-row cases
+     don't artificially balloon, but high enough that the matchup chip
+     in the centre doesn't shrink visually below the two flanking sides. */
+  min-height:140px;
   justify-content:center;
 }
 /* Both sides render identically — same row direction, same column order
@@ -2058,7 +2069,9 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   align-items:center; justify-content:center;
   gap:4px;
   padding:6px 4px;
-  min-height:60px;
+  /* Matches the new .mc-h2h-w-side min-height (140px) so the chip
+     stays vertically centred against the taller side blocks. */
+  min-height:140px;
   position:relative;
 }
 .mc-h2h-w-vs-line{
@@ -2163,11 +2176,28 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 }
 .mc-h2h-w-row{
   display:grid;
-  grid-template-columns:28px 24px 1fr auto;
+  /* First column tracks the headshot diameter (40px). The rank column
+     stays small (24px) — the digit fits comfortably and a wider column
+     would visually compete with the name. Gap bumped from 6→8px so the
+     bigger headshot has slightly more breathing room from the rank. */
+  grid-template-columns:40px 24px 1fr auto;
   align-items:center;
-  gap:6px;
-  padding:3px 0;
-  min-height:28px;
+  gap:8px;
+  padding:4px 0;
+  min-height:42px;
+  /* Touch interaction prep: cursor + transition for the :active state
+     so taps on phone feel acknowledged. The row itself is the touch
+     target — bigger than the headshot alone, so a sloppy thumb tap
+     anywhere in the row's bounds gets feedback. */
+  cursor:default;
+  -webkit-tap-highlight-color:transparent; /* kill the default iOS tap glow; we paint our own */
+  transition:
+    transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 0.18s ease;
+  border-radius:6px;
+  /* Make the whole row hit-friendly on phone — using a transparent bg
+     gives :active state somewhere visible to land. */
+  background:transparent;
 }
 
 /* ── HEADSHOT CIRCLE ──
@@ -2185,17 +2215,20 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   position:relative;
   display:inline-flex;
   align-items:center; justify-content:center;
-  width:28px; height:28px;
+  /* Bumped from 28px → 40px. This is the engagement element of the
+     panel; bigger = more recognisable. Disc background and glow scale
+     with the new size to keep the proportional ring weight. */
+  width:40px; height:40px;
   flex-shrink:0;
   border-radius:50%;
   background:radial-gradient(circle at 50% 35%,
     color-mix(in srgb, var(--team-accent) 28%, transparent) 0%,
     color-mix(in srgb, var(--team-accent) 14%, transparent) 55%,
     color-mix(in srgb, var(--team-accent) 8%, transparent) 100%);
-  border:1px solid color-mix(in srgb, var(--team-accent) 35%, transparent);
+  border:1.5px solid color-mix(in srgb, var(--team-accent) 38%, transparent);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.06),
-    0 0 8px color-mix(in srgb, var(--team-accent) 18%, transparent);
+    inset 0 1px 0 rgba(255,255,255,0.07),
+    0 0 12px color-mix(in srgb, var(--team-accent) 22%, transparent);
   overflow:hidden;
   /* The disc itself doesn't need a transition — only the image fade-in does */
 }
@@ -2207,10 +2240,11 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   inset:0;
   display:flex; align-items:center; justify-content:center;
   font-family:var(--mono);
-  font-size:0.54rem; font-weight:800;
+  /* Bumped from 0.54 to 0.72rem to fill the larger 40px disc properly */
+  font-size:0.72rem; font-weight:800;
   letter-spacing:0.04em;
   color:color-mix(in srgb, var(--team-accent) 85%, var(--white));
-  text-shadow:0 0 4px color-mix(in srgb, var(--team-accent) 50%, transparent);
+  text-shadow:0 0 5px color-mix(in srgb, var(--team-accent) 50%, transparent);
   line-height:1;
   user-select:none;
   pointer-events:none;
@@ -2233,6 +2267,51 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
      Browser-driven — the img is opaque until loaded, then transitions. */
   animation:mc-h2h-w-shot-fade 0.45s ease-out both;
 }
+/* ── TOUCH & POINTER FEEDBACK ──
+   The H2H block is primarily consumed on phones, so the rows need to
+   feel responsive to taps even though tapping doesn't currently do
+   anything functional. The pattern below uses three layers of feedback:
+
+   1) :hover (desktop pointers only) — subtle bg tint + slight lift to
+      acknowledge that the row is the entity being focused on.
+   2) :active (fires on both mouse press AND touch tap) — stronger
+      feedback that the press registered. Brief scale-up of the headshot
+      and a brighter row bg.
+   3) @media (hover: none) — phones don't have proper hover so we keep
+      the row visually quiet at rest and let :active carry the feedback.
+
+   Why scale UP the headshot on press: it's the engagement element. The
+   bigger it gets briefly, the more the user feels they're interacting
+   with the player, not just an abstract data row. Subtle though — 1.06
+   is the right amount, anything more starts feeling toy-like. */
+.mc-h2h-w-row:hover{
+  background:color-mix(in srgb, var(--team-accent) 6%, transparent);
+}
+.mc-h2h-w-row:active{
+  background:color-mix(in srgb, var(--team-accent) 12%, transparent);
+  transform:scale(0.985);
+}
+.mc-h2h-w-row:active .mc-h2h-w-shot{
+  transform:scale(1.06);
+  transition:transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+/* The disc needs a transition declared for the press scale to animate.
+   Doing it here rather than on .mc-h2h-w-shot keeps the base rule lean
+   and means we only pay the transition cost when the press happens. */
+.mc-h2h-w-shot{
+  transition:transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+/* On touch-only devices, neutralise :hover so it doesn't stick after
+   tap. Without this, mobile browsers leave the :hover bg painted until
+   the next tap somewhere else, which feels broken. */
+@media (hover: none){
+  .mc-h2h-w-row:hover{background:transparent;}
+}
+@media (prefers-reduced-motion: reduce){
+  .mc-h2h-w-row, .mc-h2h-w-shot{transition:none;}
+  .mc-h2h-w-row:active, .mc-h2h-w-row:active .mc-h2h-w-shot{transform:none;}
+}
+
 @keyframes mc-h2h-w-shot-fade{
   from{opacity:0; transform:scale(0.92);}
   to  {opacity:1; transform:scale(1);}
@@ -2491,8 +2570,8 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
     grid-template-columns:1fr 70px 1fr;
     gap:4px;
   }
-  .mc-h2h-w-side{padding:6px 7px; gap:4px; min-height:54px;}
-  .mc-h2h-w-vs{padding:4px 2px; gap:3px; min-height:54px;}
+  .mc-h2h-w-side{padding:6px 7px; gap:4px; min-height:128px;}
+  .mc-h2h-w-vs{padding:4px 2px; gap:3px; min-height:128px;}
   .mc-h2h-w-vs-marker{font-size:0.7rem;}
   .mc-h2h-w-vs-team{font-size:0.52rem; letter-spacing:0.1em;}
   .mc-h2h-w-vs-gap{font-size:0.54rem; padding:1px 5px;}
@@ -2500,16 +2579,19 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   .mc-h2h-w-vs-glyph{font-size:0.42rem; letter-spacing:0.14em;}
   .mc-h2h-w-vs-level-lbl{font-size:0.4rem; padding:2px 5px; letter-spacing:0.14em;}
   .mc-h2h-w-row{
-    grid-template-columns:24px 20px 1fr auto;
-    gap:5px;
-    min-height:24px;
+    grid-template-columns:36px 22px 1fr auto;
+    gap:7px;
+    min-height:38px;
+    padding:3px 0;
   }
-  .mc-h2h-w-name{font-size:0.54rem;}
-  .mc-h2h-w-avg{font-size:0.56rem; padding:1px 4px;}
-  .mc-h2h-w-rank{font-size:0.46rem;}
-  .mc-h2h-w-shot{width:24px; height:24px;}
-  .mc-h2h-w-shot-initials{font-size:0.46rem;}
-  .mc-h2h-w-empty-line{font-size:0.46rem;}
+  .mc-h2h-w-name{font-size:0.6rem;}
+  .mc-h2h-w-avg{font-size:0.6rem; padding:2px 5px;}
+  .mc-h2h-w-rank{font-size:0.5rem;}
+  /* Headshot scales down slightly from 40 → 36 on phone — still big
+     enough to be the visual centrepiece. Initials font tracks the size. */
+  .mc-h2h-w-shot{width:36px; height:36px;}
+  .mc-h2h-w-shot-initials{font-size:0.64rem;}
+  .mc-h2h-w-empty-line{font-size:0.5rem;}
 }
 
 /* Respect reduced-motion preference */
@@ -4882,22 +4964,66 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
                 f'</span>'
             )
 
+        def _player_surname(name):
+            """Derive a 'surname-only' display form for narrow viewports.
+            Rules:
+              • Hyphenated surnames stay intact (Wanganeen-Milera, not
+                just Milera) — those compound names are how those players
+                are known and splitting them loses identity.
+              • Surnames with particles ('De', 'Van', 'Van der', 'Le',
+                'O'') keep the particle attached (Sam De Koning → 'De Koning',
+                not 'Koning').
+              • One-word names fall back to the whole name unchanged.
+              • Empty / malformed input falls back to the original string.
+            Examples:
+              Lachie Neale          → Neale
+              Tyson Stengle         → Stengle
+              Sam De Koning         → De Koning
+              Wanganeen-Milera      → Wanganeen-Milera (single token, kept whole)
+              Joel Jeffrey          → Jeffrey
+              Connor O'Sullivan     → O'Sullivan
+            """
+            parts = (name or "").strip().split()
+            if not parts:
+                return name
+            if len(parts) == 1:
+                return parts[0]
+            # If the second-to-last token is a known particle, glue it
+            # back onto the surname. The set is small but covers the most
+            # common AFL surname patterns. Lowercased for case-insensitive
+            # matching since some sources capitalise differently.
+            PARTICLES = {"de", "van", "der", "le", "la", "du", "von"}
+            if len(parts) >= 3 and parts[-2].lower() in PARTICLES:
+                # Handle "Van der X" → "Van der X" (three-token surname)
+                if len(parts) >= 4 and parts[-3].lower() in PARTICLES:
+                    return " ".join(parts[-3:])
+                return " ".join(parts[-2:])
+            return parts[-1]
+
         def _watch_row_html(league_rank, player_name, avg, is_team_leader=False):
             """Build one player row inside a stat block. `is_team_leader`
             marks the highest-average player on this team for this stat —
             CSS uses it to subtly lift their row above the rest. This is
-            independent of the league-wide medal styling on data-rank."""
+            independent of the league-wide medal styling on data-rank.
+
+            Name display: surname only on ALL viewports. The full first
+            name was eating horizontal space without adding identification
+            value — fans recognise players by surname anyway, and the
+            larger headshot now carries the visual identification weight.
+            The _player_surname helper handles edge cases (De Koning,
+            O'Sullivan, hyphenated names like Wanganeen-Milera)."""
             crown_html = (
                 '<span class="mc-h2h-w-crown" aria-label="League leader">♕</span>'
                 if league_rank == 1 else ''
             )
             rank_attr = str(league_rank) if league_rank <= 3 else 'other'
             leader_attr = ' data-team-leader="1"' if is_team_leader else ''
+            surname = _player_surname(player_name)
             return (
                 f'<div class="mc-h2h-w-row" data-rank="{rank_attr}"{leader_attr}>'
                 f'  {_headshot_html(player_name)}'
                 f'  <span class="mc-h2h-w-rank">{league_rank}</span>'
-                f'  <span class="mc-h2h-w-name">{crown_html}{player_name}</span>'
+                f'  <span class="mc-h2h-w-name">{crown_html}{surname}</span>'
                 f'  <span class="mc-h2h-w-avg">{avg:.1f}</span>'
                 f'</div>'
             )
@@ -4938,14 +5064,29 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
         def _matchup_chip_html(home_players, away_players, home_abbr_, away_abbr_,
                                home_accent_, away_accent_):
             """The centred chip between the two teams' stat blocks. Shows
-            which team's top player is ahead, and by how much. Reads at a
-            glance: 'GEE +1.3' means Geelong's leader averages 1.3 more
-            per game than Brisbane's leader in this stat. When either team
-            lacks a leader, we render a neutral 'vs' divider instead so
-            the layout stays honest about what's comparable."""
-            home_leader_avg = home_players[0][2] if home_players else None
-            away_leader_avg = away_players[0][2] if away_players else None
-            if home_leader_avg is None or away_leader_avg is None:
+            which team is stronger in this stat across their top-ranked
+            players, and by how much.
+
+            Comparison method: average of the displayed averages for ALL
+            players shown on each side (up to H2H_WATCHLIST_TOP_N = 3).
+            This captures TEAM DEPTH in the stat — three solid players
+            beats one star alone, which is the more honest matchup signal
+            than comparing only the headline name. For example: Brisbane
+            with a #5 disposal-getter alone isn't necessarily stronger
+            than Geelong with #3, #10, and #60 spread across the rotation.
+
+            Edge cases:
+              • Either side empty → neutral 'vs' divider (nothing to compare)
+              • Uneven counts (e.g. home has 3, away has 2) → compare each
+                team's mean over the players they actually have. Footywire's
+                "min 8 games" filter means counts are usually equal at 3
+                per team late in the season, but earlier rounds may see
+                gaps and we should handle them honestly rather than padding
+                with zeros (which would unfairly punish smaller samples).
+
+            The gap is rounded to 1dp to match what the user can read off
+            the rows."""
+            if not home_players or not away_players:
                 return (
                     f'<div class="mc-h2h-w-vs mc-h2h-w-vs-neutral">'
                     f'  <span class="mc-h2h-w-vs-line"></span>'
@@ -4953,10 +5094,21 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
                     f'  <span class="mc-h2h-w-vs-line"></span>'
                     f'</div>'
                 )
-            gap = home_leader_avg - away_leader_avg
-            # Dead-heat handling — exact ties are rare but possible (e.g.
-            # 32.0 vs 32.0). Show LEVEL to give it real verbal weight.
-            if abs(gap) < 0.05:
+            # Average over each team's displayed players. Each tuple is
+            # (league_rank, name, avg) so index [2] is the average.
+            home_team_avg = sum(p[2] for p in home_players) / len(home_players)
+            away_team_avg = sum(p[2] for p in away_players) / len(away_players)
+            # Round each team's average to 1dp so the chip's gap matches
+            # what the user can mentally compute from the displayed values.
+            # Subtle but important: rounding each side independently then
+            # subtracting (rather than computing the gap and rounding it
+            # once) keeps the chip in lockstep with the row precision.
+            home_display = round(home_team_avg, 1)
+            away_display = round(away_team_avg, 1)
+            gap = home_display - away_display
+            # Dead-heat — both teams average to the same 1dp value across
+            # their top players. Genuinely tight matchup.
+            if gap == 0:
                 return (
                     f'<div class="mc-h2h-w-vs mc-h2h-w-vs-level">'
                     f'  <span class="mc-h2h-w-vs-line"></span>'
@@ -9313,6 +9465,268 @@ st.markdown("""
     letter-spacing:0.2em !important;
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+   PREMIUM EDITORIAL SYSTEM — Performance tab
+   Three structural elements that frame the existing components as a
+   cohesive premium document rather than a vertical stack of widgets:
+     • .perf-hero — wraps the KPI strip as the headline asset, with its
+       own eyebrow header and accent rail
+     • .perf-section — numbered, captioned section headers with a
+       progressing accent tone (blue → cyan → purple → green) so the
+       page reads as an editorial journey
+     • .perf-ledger-close — the bookend balance-sheet summary, like the
+       bottom-line totals of a quarterly report
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── HERO MODULE ──
+   Wraps the KPI strip in its own framed container with an eyebrow
+   header. The accent rail along the left edge is a Bloomberg cue —
+   it says "this is the headline, the rest is supporting evidence." */
+.perf-hero{
+    position:relative;
+    margin:18px 14px 0;
+    padding:14px 16px 4px;
+    background:linear-gradient(180deg,
+        rgba(52,211,153,0.025) 0%,
+        rgba(5,5,10,0.0) 60%);
+    border:1px solid rgba(52,211,153,0.20);
+    border-radius:12px;
+    /* Inset the KPI strip's existing margins so it sits flush inside
+       this hero frame instead of stacking double-margins. */
+    overflow:hidden;
+    animation:fadeUp 0.55s ease both;
+    animation-delay:0.03s;
+}
+.perf-hero .pkpi-strip{
+    /* Override the KPI strip's outer margins when nested inside .perf-hero
+       so it fills the hero card cleanly rather than floating inside it. */
+    margin:10px 0 4px !important;
+}
+.perf-hero-rail{
+    position:absolute;
+    top:14px; bottom:14px; left:0;
+    width:3px;
+    border-radius:0 3px 3px 0;
+    background:linear-gradient(180deg,
+        rgba(79,143,255,0.6) 0%,
+        rgba(34,211,238,0.7) 50%,
+        rgba(52,211,153,0.6) 100%);
+    box-shadow:0 0 12px rgba(34,211,238,0.35);
+}
+.perf-hero-eyebrow{
+    display:flex; align-items:baseline;
+    gap:10px;
+    padding-left:8px;
+    margin-bottom:0;
+}
+.perf-hero-eyebrow-glyph{
+    color:var(--green);
+    font-size:0.7rem;
+    line-height:1;
+    text-shadow:0 0 8px rgba(52,211,153,0.55);
+}
+.perf-hero-eyebrow-lbl{
+    font-family:var(--mono);
+    font-size:0.72rem;
+    font-weight:800;
+    letter-spacing:0.18em;
+    color:var(--white);
+    text-transform:uppercase;
+    line-height:1;
+}
+.perf-hero-eyebrow-sub{
+    font-family:var(--mono);
+    font-size:0.48rem;
+    font-weight:600;
+    letter-spacing:0.08em;
+    color:var(--text3);
+    text-transform:uppercase;
+    line-height:1;
+    margin-left:auto;
+}
+
+/* ── EDITORIAL SECTION HEADER ──
+   Numbered, captioned, accent-toned. Replaces the old simple divider
+   pattern with a proper chapter heading. Layout:
+     [number]  [title + caption]  [accent rule line]
+   The number is large, mono, tabular — gives the section a real
+   "Chapter 02" feel. The caption beneath sells the section in one line. */
+.perf-section{
+    display:grid;
+    grid-template-columns:auto 1fr;
+    align-items:start;
+    gap:14px;
+    margin:32px 14px 12px;
+    padding:14px 4px 12px;
+    position:relative;
+    animation:fadeUp 0.5s ease both;
+}
+.perf-section::before{
+    /* Top hairline — the section's accent rule runs across the full width */
+    content:'';
+    position:absolute;
+    top:0; left:0; right:0;
+    height:1px;
+    background:linear-gradient(90deg,
+        transparent 0%,
+        var(--section-accent, rgba(79,143,255,0.5)) 12%,
+        var(--section-accent, rgba(79,143,255,0.5)) 88%,
+        transparent 100%);
+}
+.perf-section-num{
+    font-family:var(--mono);
+    font-size:1.65rem;
+    font-weight:800;
+    letter-spacing:-0.04em;
+    line-height:1;
+    color:var(--section-accent, var(--accent));
+    text-shadow:0 0 14px var(--section-accent-glow, rgba(79,143,255,0.35));
+    font-variant-numeric:tabular-nums;
+    /* Slight negative top margin so the figure baselines with the title */
+    margin-top:-2px;
+    min-width:38px;
+}
+.perf-section-meta{
+    display:flex; flex-direction:column;
+    gap:3px;
+    min-width:0;
+}
+.perf-section-title{
+    font-family:var(--mono);
+    font-size:0.78rem;
+    font-weight:800;
+    letter-spacing:0.16em;
+    color:var(--white);
+    text-transform:uppercase;
+    line-height:1.1;
+}
+.perf-section-caption{
+    font-family:var(--mono);
+    font-size:0.5rem;
+    font-weight:600;
+    letter-spacing:0.04em;
+    color:var(--text2);
+    line-height:1.35;
+    text-transform:none;
+    /* Caption is set in normal case (not ALL CAPS) for readability —
+       gives the section a paragraph feel rather than another label. */
+    max-width:520px;
+}
+.perf-section-rule{
+    /* Just here to provide grid structure; styling lives on ::before */
+    display:none;
+}
+
+/* Per-tone accent palettes. Each section inherits its own --section-accent
+   custom property, used by the number colour, top hairline, and any
+   nested elements that opt in. Progression: blue → cyan → purple → green
+   reads as "analysis → trend → calibration → receipts." */
+.perf-section[data-tone="blue"]{
+    --section-accent:rgba(79,143,255,0.85);
+    --section-accent-glow:rgba(79,143,255,0.4);
+}
+.perf-section[data-tone="cyan"]{
+    --section-accent:rgba(34,211,238,0.85);
+    --section-accent-glow:rgba(34,211,238,0.4);
+}
+.perf-section[data-tone="purple"]{
+    --section-accent:rgba(167,139,250,0.85);
+    --section-accent-glow:rgba(167,139,250,0.4);
+}
+.perf-section[data-tone="green"]{
+    --section-accent:rgba(52,211,153,0.85);
+    --section-accent-glow:rgba(52,211,153,0.4);
+}
+
+/* ── CLOSING LEDGER LINE ──
+   Bookends the page with a one-line balance-sheet summary. Reads like
+   the totals row at the bottom of a financial statement — the period
+   close. Subtle but final: tells the user "this is the receipt." */
+.perf-ledger-close{
+    margin:36px 14px 14px;
+    padding:18px 14px 14px;
+    position:relative;
+    text-align:center;
+    font-family:var(--mono);
+}
+.perf-ledger-close-rule{
+    /* Double-rule pattern: a thicker accent line above, thin line just
+       below it. Echoes the visual idiom of audited financial totals. */
+    margin:0 auto 14px;
+    max-width:480px;
+    height:3px;
+    background:
+        linear-gradient(90deg,transparent, rgba(52,211,153,0.55), transparent) center / 100% 1px no-repeat,
+        linear-gradient(90deg,transparent, rgba(52,211,153,0.2),  transparent) center bottom / 100% 1px no-repeat;
+}
+.perf-ledger-close-row{
+    display:inline-flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    align-items:baseline;
+    gap:9px;
+    font-size:0.56rem;
+    font-weight:800;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    line-height:1.4;
+}
+.perf-ledger-close-lbl{
+    color:var(--text2);
+    font-weight:700;
+}
+.perf-ledger-close-val{
+    color:var(--white);
+    font-variant-numeric:tabular-nums;
+    letter-spacing:0.06em;
+}
+.perf-ledger-close-sep{
+    color:var(--border3);
+    opacity:0.5;
+    font-weight:400;
+}
+.perf-ledger-close-stamp{
+    margin-top:9px;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:5px 11px;
+    border-radius:3px;
+    background:rgba(52,211,153,0.08);
+    border:1px solid rgba(52,211,153,0.25);
+    font-size:0.46rem;
+    font-weight:800;
+    letter-spacing:0.16em;
+    color:var(--green);
+    text-transform:uppercase;
+}
+.perf-ledger-close-tick{
+    font-size:0.6rem;
+    line-height:1;
+    text-shadow:0 0 5px rgba(52,211,153,0.55);
+}
+.perf-ledger-close-stamp-lbl{
+    font-variant-numeric:tabular-nums;
+}
+
+/* ── MOBILE — scale section headers and ledger close for phone widths ── */
+@media (max-width:520px){
+    .perf-hero{margin:14px 12px 0; padding:12px 14px 4px;}
+    .perf-hero-eyebrow-lbl{font-size:0.62rem; letter-spacing:0.14em;}
+    .perf-hero-eyebrow-sub{display:none;}
+    .perf-section{
+        margin:24px 12px 10px;
+        gap:11px;
+        padding:11px 0 9px;
+    }
+    .perf-section-num{font-size:1.35rem; min-width:30px;}
+    .perf-section-title{font-size:0.66rem; letter-spacing:0.12em;}
+    .perf-section-caption{font-size:0.46rem;}
+    .perf-ledger-close{margin:28px 12px 12px; padding:14px 8px 12px;}
+    .perf-ledger-close-row{font-size:0.5rem; gap:7px;}
+    .perf-ledger-close-stamp{font-size:0.42rem;}
+}
+
 /* ── MOBILE — stack the KPI blocks vertically on phone-width screens ── */
 @media (max-width:640px){
     .pkpi-strip{
@@ -9568,6 +9982,148 @@ st.markdown("""
     animation:live-blink 1.4s ease-in-out infinite;
 }
 .ids-sep{color:var(--text3); opacity:0.5; font-size:0.5rem;}
+
+/* ════════════════════════════════════════════════════════════════════════
+   TERMINAL STATUS BAR — sticky, viewport-bottom
+   The "is this thing alive?" surface. Bloomberg terminals have something
+   like this in every screen — a thin always-on strip with the system's
+   pulse. Doesn't ask for attention but rewards a glance: round number,
+   tip totals, live clock. As the user scrolls long ledgers and match
+   cards, this stays put — the consistent reminder that the page is a
+   live feed, not a static document.
+   ════════════════════════════════════════════════════════════════════════ */
+.tsb-strip{
+    position:fixed;
+    bottom:0; left:0; right:0;
+    z-index:90;
+    height:30px;
+    background:rgba(4,4,8,0.92);
+    backdrop-filter:blur(18px) saturate(140%);
+    -webkit-backdrop-filter:blur(18px) saturate(140%);
+    font-family:var(--mono);
+    /* Slight upward shadow so it floats above scroll content without
+       feeling pasted on. Subtle — 8px max blur, very low alpha. */
+    box-shadow:0 -2px 18px rgba(0,0,0,0.5), 0 -1px 0 rgba(255,255,255,0.02) inset;
+    pointer-events:auto;
+    /* Respect iPhone home-indicator safe area — pad the bar's bottom
+       by the system-reserved inset so content doesn't slide under the
+       home indicator. Falls back to 0 on devices without an inset. */
+    padding-bottom:env(safe-area-inset-bottom, 0px);
+    box-sizing:content-box;
+}
+/* Accent-gradient hairline runs the full width along the top edge.
+   Same palette as the existing perf-feed and sig-footer accents so the
+   bar reads as part of the same visual system. */
+.tsb-strip-hairline{
+    position:absolute; top:0; left:0; right:0; height:1px;
+    background:linear-gradient(90deg,
+        transparent 0%,
+        rgba(79,143,255,0.55) 25%,
+        rgba(34,211,238,0.6)  50%,
+        rgba(167,139,250,0.55) 75%,
+        transparent 100%);
+    pointer-events:none;
+}
+.tsb-strip-inner{
+    display:grid;
+    grid-template-columns:1fr auto 1fr;
+    align-items:center;
+    height:100%;
+    padding:0 14px;
+    gap:18px;
+    max-width:1400px;
+    margin:0 auto;
+}
+.tsb-cell{
+    display:flex; align-items:center;
+    gap:7px;
+    font-size:0.5rem;
+    font-weight:600;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    line-height:1;
+    white-space:nowrap;
+}
+.tsb-cell-l{justify-content:flex-start;}
+.tsb-cell-c{justify-content:center;}
+.tsb-cell-r{justify-content:flex-end;}
+
+/* Key/value styling — the Bloomberg "LABEL value" idiom. Labels are
+   small, dim, all-caps; values are slightly larger, bright, tabular. */
+.tsb-k{
+    color:var(--text3);
+    font-weight:700;
+    opacity:0.65;
+}
+.tsb-v{
+    color:var(--white);
+    font-weight:800;
+    letter-spacing:0.06em;
+    font-variant-numeric:tabular-nums;
+}
+.tsb-v-live{
+    color:var(--green);
+    text-shadow:0 0 6px rgba(52,211,153,0.45);
+}
+.tsb-v-clock{
+    letter-spacing:0.04em;
+    color:var(--accent);
+    text-shadow:0 0 5px rgba(79,143,255,0.4);
+}
+.tsb-strike{
+    color:var(--green);
+}
+.tsb-sep{
+    color:var(--border3);
+    opacity:0.5;
+    font-weight:400;
+    padding:0 1px;
+}
+
+/* THE pulse. Single dot, single source of "this is live" — adding more
+   pulses would dilute it. Opacity-only animation (no transform) so it
+   never causes layout reflow or visual jitter against the surrounding
+   tabular text. */
+.tsb-pulse{
+    width:6px; height:6px;
+    border-radius:50%;
+    background:var(--green);
+    box-shadow:
+        0 0 4px rgba(52,211,153,0.7),
+        0 0 8px rgba(52,211,153,0.3);
+    animation:tsb-pulse 2.4s ease-in-out infinite;
+    flex-shrink:0;
+}
+@keyframes tsb-pulse{
+    0%, 100% {opacity:1;}
+    50%      {opacity:0.4;}
+}
+@media (prefers-reduced-motion: reduce){
+    .tsb-pulse{animation:none;}
+}
+
+/* ── PHONE WIDTHS ─────────────────────────────────────────────────────
+   Drop the centre data cell on phones — three columns at <520px would
+   crush the type below readable size. Left (state) and right (clock)
+   stay; the centre cell's information is already visible elsewhere on
+   the page (the KPI strip in Performance and the round-pulse banner). */
+@media (max-width:520px){
+    .tsb-strip{height:26px;}
+    .tsb-strip-inner{
+        grid-template-columns:1fr 1fr;
+        padding:0 10px;
+        gap:12px;
+    }
+    .tsb-cell-c{display:none;}
+    .tsb-cell{font-size:0.46rem; letter-spacing:0.1em; gap:5px;}
+    .tsb-pulse{width:5px; height:5px;}
+}
+
+/* Shell content padding accommodates the sticky status bar at the bottom
+   of the viewport. Original was 80px; adding 30px for the status bar
+   height plus a little extra so the sig-footer's tagline has comfortable
+   clearance above the bar. */
+.shell{padding-bottom:110px;}
 
 /* SIGNATURE FOOTER — bookends the page with system identity. */
 .sig-footer{
@@ -10733,17 +11289,16 @@ def main():
 
     with tab2:
         # ── PERFORMANCE — the receipts, the rhythm, the receipts again ──
-        # Restructured around a Bloomberg-style information hierarchy:
-        #   1. Premium banner with the headline number (strike rate) baked in
-        #   2. KPI strip — three big tabular figures with deltas, the
-        #      "we know our shit" anchor that frames everything below
-        #   3. Four editorial sections, ordered most-glanceable first:
-        #        a. MARKET POSITIONING & TIMING — fav vs dog + day of week
-        #           (the most interesting analytical splits — answers
-        #           "when does this model have an edge?")
-        #        b. SEASON RHYTHM — streak/form summary
-        #        c. CONFIDENCE LADDER — trust brackets (calibration proof)
-        #        d. ROUND LEDGER — the granular receipts (scorecards)
+        # Restructured as a proper editorial document, not a list of widgets:
+        #
+        #   • PREMIUM BANNER — pulses live, real strike rate baked in
+        #   • HERO MODULE — KPI strip wrapped in its own frame with
+        #     "HEADLINE METRICS" eyebrow, distinguishing it from sections
+        #   • FOUR SECTIONS — numbered, captioned, progressing through
+        #     accent colours (blue → cyan → purple → green) so the page
+        #     reads as a journey rather than a flat dump
+        #   • CLOSING LEDGER LINE — single balance-sheet summary that
+        #     ties everything together, like the bottom of a quarterly
         if tracker:
             # Compute the headline metric inline so the banner shows real
             # numbers, not just "VERIFIED" decoration. Bloomberg-style: the
@@ -10752,6 +11307,8 @@ def main():
             _n_total = len(_all_games)
             _n_correct = sum(1 for g in _all_games if g["correct"])
             _sr = (_n_correct / _n_total * 100) if _n_total else 0
+            _margin_games = [g for g in _all_games if g.get("margin_error") is not None]
+            _mae = (sum(g["margin_error"] for g in _margin_games) / len(_margin_games)) if _margin_games else None
 
             st.markdown('<div class="perf-scope">', unsafe_allow_html=True)
             st.markdown(_h(f"""
@@ -10768,39 +11325,100 @@ def main():
             </div>
             """), unsafe_allow_html=True)
 
-            # ── 1) HEADLINE KPI STRIP ── the three Bloomberg blocks
+            # ── HERO MODULE — frames the KPI strip as the headline asset ──
+            # Wraps render_performance_kpi_strip in its own bordered card
+            # with an eyebrow above and the accent rail running down the
+            # left edge. Distinguishes the KPI strip from the section
+            # blocks below — this is THE headline, the others are chapters.
+            st.markdown(_h("""
+            <div class="perf-hero">
+              <div class="perf-hero-rail"></div>
+              <div class="perf-hero-eyebrow">
+                <span class="perf-hero-eyebrow-glyph">◆</span>
+                <span class="perf-hero-eyebrow-lbl">Headline Metrics</span>
+                <span class="perf-hero-eyebrow-sub">Season-wide signals · updated each round</span>
+              </div>
+            """), unsafe_allow_html=True)
             render_performance_kpi_strip(tracker)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-            # ── 2) MARKET POSITIONING & TIMING ──
-            # Where we have an edge: betting category (favs vs dogs) and
-            # weekday rhythm. Putting this first puts the analytical
-            # answer — "this is when/where the model works" — above the
-            # raw track record. Sales angle: leads with the proof, not
-            # the totals.
-            st.markdown('<div class="sc-divider perf-section-divider"><span class="sc-divider-label">Market Positioning &amp; Timing</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
+            # ── EDITORIAL SECTION HELPER ──
+            # Each section gets a numbered, captioned header with a
+            # progressing accent colour. Tones: 01 blue (analysis), 02
+            # cyan (trend), 03 purple (calibration), 04 green (receipts).
+            # The caption sells the section in one line — answers "what
+            # am I looking at?" before the user has to scan the widget.
+            def _perf_section(num, title, caption, tone):
+                st.markdown(_h(f"""
+                <div class="perf-section" data-tone="{tone}">
+                  <div class="perf-section-num">{num}</div>
+                  <div class="perf-section-meta">
+                    <div class="perf-section-title">{title}</div>
+                    <div class="perf-section-caption">{caption}</div>
+                  </div>
+                  <div class="perf-section-rule"></div>
+                </div>
+                """), unsafe_allow_html=True)
+
+            # ── 01 · MARKET POSITIONING & TIMING ──
+            _perf_section(
+                "01", "Market Positioning &amp; Timing",
+                "Where the model finds its edge — favourite vs underdog splits, and form by weekday.",
+                "blue",
+            )
             render_split_analytics(tracker)
 
-            # ── 3) SEASON RHYTHM ──
-            # Promoted from old Intelligence tab. The streak/form chart
-            # is the most glanceable narrative artefact — shows momentum.
-            st.markdown('<div class="sc-divider perf-section-divider"><span class="sc-divider-label">Season Rhythm</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
+            # ── 02 · SEASON RHYTHM ──
+            _perf_section(
+                "02", "Season Rhythm",
+                "Form arc across the season — hot streaks, cold patches, and the trajectory.",
+                "cyan",
+            )
             render_rhythm(tracker)
 
-            # ── 4) CONFIDENCE LADDER ──
-            # Trust brackets — the calibration proof. "When we say we're
-            # this sure, here's what we deliver." This is the technical
-            # honesty section and pairs naturally with the Confidence
-            # Edge KPI from the strip above.
-            st.markdown('<div class="sc-divider perf-section-divider"><span class="sc-divider-label">Confidence Ladder</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
+            # ── 03 · CONFIDENCE LADDER ──
+            _perf_section(
+                "03", "Confidence Ladder",
+                "Calibration proof — when we said we were sure, here's how often we delivered.",
+                "purple",
+            )
             render_trust_brackets(tracker)
 
-            # ── 5) ROUND LEDGER ──
-            # The granular receipts. Two scorecards: tip accuracy + margin.
-            # Last because they're the deep-dive; everything above sets the
-            # context for what these grids show.
-            st.markdown('<div class="sc-divider perf-section-divider"><span class="sc-divider-label">Round Ledger</span><div class="sc-divider-line"></div></div>', unsafe_allow_html=True)
+            # ── 04 · ROUND LEDGER ──
+            _perf_section(
+                "04", "Round Ledger",
+                "The granular record — every tip, every round, with margin precision.",
+                "green",
+            )
             render_scorecard(tracker)
             render_margin_scorecard(tracker)
+
+            # ── CLOSING BALANCE-SHEET LINE ──
+            # Bookends the tab with a one-line summary, the way a real
+            # financial report ends with a bottom-line totals row. Wraps
+            # the four headline numbers (correct/total/strike/MAE) plus
+            # a "verified" stamp and a timestamp. Reads as the period's
+            # accounting close.
+            _mae_str = f"{_mae:.1f}pts MAE" if _mae is not None else "MAE pending"
+            st.markdown(_h(f"""
+            <div class="perf-ledger-close">
+              <div class="perf-ledger-close-rule"></div>
+              <div class="perf-ledger-close-row">
+                <span class="perf-ledger-close-lbl">YEAR TO DATE</span>
+                <span class="perf-ledger-close-sep">·</span>
+                <span class="perf-ledger-close-val">{_n_correct} OF {_n_total} CORRECT</span>
+                <span class="perf-ledger-close-sep">·</span>
+                <span class="perf-ledger-close-val">{_sr:.1f}% STRIKE</span>
+                <span class="perf-ledger-close-sep">·</span>
+                <span class="perf-ledger-close-val">{_mae_str}</span>
+              </div>
+              <div class="perf-ledger-close-stamp">
+                <span class="perf-ledger-close-tick">✓</span>
+                <span class="perf-ledger-close-stamp-lbl">VERIFIED · {len(tracker)} ROUNDS RECORDED</span>
+              </div>
+            </div>
+            """), unsafe_allow_html=True)
+
             st.markdown('</div>', unsafe_allow_html=True)
         else:
             st.markdown(_h("""
@@ -10858,6 +11476,69 @@ def main():
 
     st.markdown('</div>', unsafe_allow_html=True)
 
+    # ════════════════════════════════════════════════════════════════════
+    # PERSISTENT TERMINAL STATUS BAR (sticky, viewport-bottom)
+    # ════════════════════════════════════════════════════════════════════
+    # The single biggest "Bloomberg terminal" cue a page can have: a thin
+    # always-visible status strip that signals the system is alive,
+    # monitored, and tracking real numbers right now. Sits at the very
+    # bottom of the viewport, scrolls with nothing, follows the user
+    # everywhere. Reads as ambient monitoring rather than an active UI
+    # element — the eye learns to trust it's there without focusing on it.
+    #
+    # Three cells:
+    #   LEFT   — system state: live pulse + current round
+    #   CENTRE — data signal: season tip count + strike rate
+    #   RIGHT  — clock: real-time Perth timestamp
+    #
+    # On phone, the centre cell hides — three cells in 380px would
+    # squeeze the type below readable size.
+    #
+    # The single pulsing dot is intentional — Bloomberg uses one live
+    # indicator per surface to mean "this data is live." Adding more
+    # pulses would dilute it into ambient noise.
+    if tracker:
+        _all_games_status = [g for r in tracker for g in r["games"]]
+        _n_tips = len(_all_games_status)
+        _n_hit = sum(1 for g in _all_games_status if g["correct"])
+        _strike_pct = (_n_hit / _n_tips * 100) if _n_tips else 0
+        status_centre = (
+            f'<span class="tsb-k">TIPS</span>'
+            f'<span class="tsb-v">{_n_hit}/{_n_tips}</span>'
+            f'<span class="tsb-sep">·</span>'
+            f'<span class="tsb-k">STRIKE</span>'
+            f'<span class="tsb-v tsb-strike">{_strike_pct:.1f}%</span>'
+        )
+    else:
+        status_centre = (
+            '<span class="tsb-k">TIPS</span>'
+            '<span class="tsb-v">—</span>'
+        )
+
+    st.markdown(_h(f"""
+    <div class="tsb-strip" role="status" aria-live="polite">
+      <div class="tsb-strip-hairline"></div>
+      <div class="tsb-strip-inner">
+        <div class="tsb-cell tsb-cell-l">
+          <span class="tsb-pulse" aria-hidden="true"></span>
+          <span class="tsb-k">FEED</span>
+          <span class="tsb-v tsb-v-live">LIVE</span>
+          <span class="tsb-sep">·</span>
+          <span class="tsb-k">RND</span>
+          <span class="tsb-v">{rnd:02d}</span>
+        </div>
+        <div class="tsb-cell tsb-cell-c">
+          {status_centre}
+        </div>
+        <div class="tsb-cell tsb-cell-r">
+          <span class="tsb-k">AWST</span>
+          <span class="tsb-v tsb-v-clock">{now_stamp}</span>
+        </div>
+      </div>
+    </div>
+    """), unsafe_allow_html=True)
+
 if __name__ == "__main__":
     main()
+
 

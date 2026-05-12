@@ -2579,18 +2579,59 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   .mc-h2h-w-vs-glyph{font-size:0.42rem; letter-spacing:0.14em;}
   .mc-h2h-w-vs-level-lbl{font-size:0.4rem; padding:2px 5px; letter-spacing:0.14em;}
   .mc-h2h-w-row{
-    grid-template-columns:36px 22px 1fr auto;
-    gap:7px;
+    /* Collapse the rank column to zero — it gets re-rendered as a ::before
+       on the name span instead, freeing ~27px of horizontal space. Without
+       this, names like "Neale" and "Ashcroft" truncate to single letters
+       on phone-width because the fixed columns eat the row's full width.
+       Gaps shrunk from 7→5px to recover another few pixels. */
+    grid-template-columns:32px 0 1fr auto;
+    gap:5px;
     min-height:38px;
     padding:3px 0;
   }
+  /* Hide the standalone rank cell — it's still in the DOM (kept for
+     desktop) but visually replaced by the inline prefix on phone. */
+  .mc-h2h-w-rank{display:none;}
+  /* Inline rank prefix on the name span. The --row-rank custom property
+     is set on each row via inline style with the value '#5', '#15' etc.
+     Uses content: attr() syntax via var() because pseudo-element content
+     can read CSS custom properties since 2023+. Falls back gracefully on
+     older browsers (just shows the surname without the rank, which is
+     still readable). */
+  .mc-h2h-w-name::before{
+    content:var(--row-rank, '');
+    color:var(--team-accent);
+    opacity:0.7;
+    font-weight:600;
+    margin-right:5px;
+    font-variant-numeric:tabular-nums;
+    letter-spacing:-0.01em;
+    /* Slight size reduction vs the surname so the rank reads as
+       secondary info — the name remains the primary identifier. */
+    font-size:0.92em;
+  }
+  /* Medal-tier rank colours still apply on phone — keep the rank prefix
+     glowing gold/silver/bronze when the player is league top-3. */
+  .mc-h2h-w-row[data-rank="1"] .mc-h2h-w-name::before{
+    color:#fbbf24;
+    text-shadow:0 0 4px rgba(251,191,36,0.5);
+    opacity:1;
+  }
+  .mc-h2h-w-row[data-rank="2"] .mc-h2h-w-name::before{
+    color:#d4dae0;
+    opacity:0.95;
+  }
+  .mc-h2h-w-row[data-rank="3"] .mc-h2h-w-name::before{
+    color:#d49060;
+    opacity:0.95;
+  }
   .mc-h2h-w-name{font-size:0.6rem;}
-  .mc-h2h-w-avg{font-size:0.6rem; padding:2px 5px;}
-  .mc-h2h-w-rank{font-size:0.5rem;}
-  /* Headshot scales down slightly from 40 → 36 on phone — still big
-     enough to be the visual centrepiece. Initials font tracks the size. */
-  .mc-h2h-w-shot{width:36px; height:36px;}
-  .mc-h2h-w-shot-initials{font-size:0.64rem;}
+  .mc-h2h-w-avg{font-size:0.58rem; padding:1px 4px;}
+  /* Headshot shrunk slightly more (36 → 32) to give the name column
+     just a little extra breathing room — three players per side, and
+     longer surnames like "Ashcroft" or "De Koning" need every pixel. */
+  .mc-h2h-w-shot{width:32px; height:32px;}
+  .mc-h2h-w-shot-initials{font-size:0.58rem;}
   .mc-h2h-w-empty-line{font-size:0.5rem;}
 }
 
@@ -5023,7 +5064,7 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
                 f'<div class="mc-h2h-w-row" data-rank="{rank_attr}"{leader_attr}>'
                 f'  {_headshot_html(player_name)}'
                 f'  <span class="mc-h2h-w-rank">{league_rank}</span>'
-                f'  <span class="mc-h2h-w-name">{crown_html}{surname}</span>'
+                f'  <span class="mc-h2h-w-name" style="--row-rank:\'#{league_rank}\';">{crown_html}{surname}</span>'
                 f'  <span class="mc-h2h-w-avg">{avg:.1f}</span>'
                 f'</div>'
             )
@@ -5817,10 +5858,107 @@ def render_performance_kpi_strip(tracker):
             f'</div>'
         )
 
+    # ── Helper: build the strike-rate sparkline ──
+    # Tiny inline SVG showing per-round hit rate across the season. The
+    # single biggest confidence-building element on the page — transforms
+    # the headline number from a static fact into a visible trajectory.
+    # Punters can see "this isn't a one-time fluke, look at the line."
+    #
+    # The line draws itself via CSS stroke-dasharray animation on first
+    # reveal (~0.8s). A faint dashed 50% baseline shows random-chance
+    # reference so the user can see we're consistently above it.
+    def _sparkline_svg(tracker_for_spark, kind='strike'):
+        """Build a self-drawing SVG sparkline of per-round metric.
+        kind='strike' → plots hit-rate per round (0-100% scale, baseline at 50%)
+        kind='mae'    → plots MAE per round (auto-scaled, no baseline since
+                        there's no obvious reference value for margin error)
+
+        Returns empty string if fewer than 2 rounds have data — a single
+        point isn't a trajectory, and showing one would feel like a
+        half-built widget."""
+        if not tracker_for_spark or len(tracker_for_spark) < 2:
+            return ''
+        # Compute per-round metric values, depending on kind
+        values = []
+        if kind == 'strike':
+            for r in tracker_for_spark:
+                games_r = r.get("games", [])
+                if not games_r:
+                    continue
+                correct_r = sum(1 for g in games_r if g["correct"])
+                values.append(correct_r / len(games_r) * 100)
+        elif kind == 'mae':
+            for r in tracker_for_spark:
+                margin_r = [g["margin_error"] for g in r.get("games", []) if g.get("margin_error") is not None]
+                if not margin_r:
+                    continue
+                values.append(sum(margin_r) / len(margin_r))
+        else:
+            return ''
+        if len(values) < 2:
+            return ''
+        # SVG dimensions — sized to slot neatly beneath the KPI figure
+        W, H = 130, 30
+        PAD_Y = 4
+        n = len(values)
+        # Y-axis range: strike is fixed 0-100, MAE auto-scales to data
+        if kind == 'strike':
+            y_min, y_max = 0, 100
+            baseline_value = 50  # random-chance reference
+        else:  # mae
+            # Auto-scale with a small buffer above/below so the line
+            # doesn't hug the box edges
+            v_min, v_max = min(values), max(values)
+            buffer = max(2.0, (v_max - v_min) * 0.15)
+            y_min, y_max = max(0, v_min - buffer), v_max + buffer
+            baseline_value = None  # no obvious baseline for MAE
+        def _x(i): return round((i / (n - 1)) * W, 2)
+        def _y(v):
+            if y_max == y_min:
+                return H / 2
+            t = (v - y_min) / (y_max - y_min)
+            t = max(0, min(1, t))
+            return round(H - PAD_Y - t * (H - 2 * PAD_Y), 2)
+        points = [(_x(i), _y(v)) for i, v in enumerate(values)]
+        path_d = "M " + " L ".join(f"{x},{y}" for x, y in points)
+        area_d = path_d + f" L {points[-1][0]},{H} L {points[0][0]},{H} Z"
+        last_x, last_y = points[-1]
+        # Class hooks let CSS theme each variant independently
+        cls = f'pkpi-spark pkpi-spark-{kind}'
+        baseline_html = ''
+        if baseline_value is not None:
+            baseline_y_pos = _y(baseline_value)
+            baseline_html = (
+                f'<line class="pkpi-spark-baseline" '
+                f'      x1="0" y1="{baseline_y_pos}" x2="{W}" y2="{baseline_y_pos}"/>'
+            )
+        # Unique gradient id per kind so the two sparklines don't clash
+        # when both render on the same page (SVG defs live in a global ns)
+        grad_id = f'pkpi-spark-fill-{kind}'
+        return (
+            f'<svg class="{cls}" viewBox="0 0 {W} {H}" '
+            f'     preserveAspectRatio="none" '
+            f'     xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
+            f'  <defs>'
+            f'    <linearGradient id="{grad_id}" x1="0" y1="0" x2="0" y2="1">'
+            f'      <stop offset="0%" class="pkpi-spark-stop-top"/>'
+            f'      <stop offset="100%" class="pkpi-spark-stop-bot"/>'
+            f'    </linearGradient>'
+            f'  </defs>'
+            f'  {baseline_html}'
+            f'  <path  class="pkpi-spark-area" d="{area_d}" fill="url(#{grad_id})"/>'
+            f'  <path  class="pkpi-spark-line" d="{path_d}"/>'
+            f'  <circle class="pkpi-spark-dot" cx="{last_x}" cy="{last_y}" r="2.2"/>'
+            f'</svg>'
+        )
+
     # ── Block builders ──
     # Strike Rate
     sr_value_html = (
-        f'<span class="pkpi-figure">{strike_rate:.1f}<span class="pkpi-unit">%</span></span>'
+        f'<span class="pkpi-figure">'
+        f'<span class="pkpi-countup" data-target="{strike_rate:.1f}" data-decimals="1">{strike_rate:.1f}</span>'
+        f'<span class="pkpi-unit">%</span>'
+        f'</span>'
     )
     sr_block = (
         f'<div class="pkpi-block">'
@@ -5830,6 +5968,7 @@ def render_performance_kpi_strip(tracker):
         f'  </div>'
         f'  {sr_value_html}'
         f'  <div class="pkpi-sub">{n_correct} of {n_total} tips correct</div>'
+        f'  {_sparkline_svg(tracker, kind="strike")}'
         f'  {_delta_html(sr_delta, "pp", direction="up_good", threshold=1.5)}'
         f'</div>'
     )
@@ -5837,7 +5976,10 @@ def render_performance_kpi_strip(tracker):
     # Margin Precision
     if mae is not None:
         mp_value_html = (
-            f'<span class="pkpi-figure">{mae:.1f}<span class="pkpi-unit">pts</span></span>'
+            f'<span class="pkpi-figure">'
+            f'<span class="pkpi-countup" data-target="{mae:.1f}" data-decimals="1">{mae:.1f}</span>'
+            f'<span class="pkpi-unit">pts</span>'
+            f'</span>'
         )
         mp_block = (
             f'<div class="pkpi-block">'
@@ -5847,6 +5989,7 @@ def render_performance_kpi_strip(tracker):
             f'  </div>'
             f'  {mp_value_html}'
             f'  <div class="pkpi-sub">mean absolute error · {len(margin_games)} tips</div>'
+            f'  {_sparkline_svg(tracker, kind="mae")}'
             f'  {_delta_html(mae_delta, "pts", direction="up_bad", threshold=1.0)}'
             f'</div>'
         )
@@ -5865,7 +6008,11 @@ def render_performance_kpi_strip(tracker):
     # Confidence Edge
     if edge is not None:
         ce_value_html = (
-            f'<span class="pkpi-figure">{"+" if edge >= 0 else "−"}{abs(edge):.1f}<span class="pkpi-unit">pp</span></span>'
+            f'<span class="pkpi-figure">'
+            f'{"+" if edge >= 0 else "−"}'
+            f'<span class="pkpi-countup" data-target="{abs(edge):.1f}" data-decimals="1">{abs(edge):.1f}</span>'
+            f'<span class="pkpi-unit">pp</span>'
+            f'</span>'
         )
         ce_block = (
             f'<div class="pkpi-block">'
@@ -5890,7 +6037,10 @@ def render_performance_kpi_strip(tracker):
                 f'    <span class="pkpi-eyebrow-glyph">⌬</span>'
                 f'    <span class="pkpi-eyebrow-lbl">Confidence Edge</span>'
                 f'  </div>'
-                f'  <span class="pkpi-figure">{hc_rate:.1f}<span class="pkpi-unit">%</span></span>'
+                f'  <span class="pkpi-figure">'
+                f'<span class="pkpi-countup" data-target="{hc_rate:.1f}" data-decimals="1">{hc_rate:.1f}</span>'
+                f'<span class="pkpi-unit">%</span>'
+                f'</span>'
                 f'  <div class="pkpi-sub">high-conf hit rate · {len(high_conf_games)} tips</div>'
                 f'  <div class="pkpi-delta pkpi-delta-neutral">'
                 f'    <span class="pkpi-delta-arrow">·</span>'
@@ -5919,6 +6069,83 @@ def render_performance_kpi_strip(tracker):
       {ce_block}
     </div>
     """), unsafe_allow_html=True)
+
+    # ── KPI count-up animation ──
+    # Animates each .pkpi-countup span from 0 to its data-target on first
+    # reveal in this session. Looks like the system computing — gives the
+    # metrics a "we just calculated this for you" feel rather than "static
+    # number on a page." Uses sessionStorage so subsequent renders within
+    # the same browser session show the final value immediately (avoids
+    # the annoying re-trigger every time the user switches tabs or
+    # interacts with anything that causes a Streamlit rerun).
+    #
+    # Why a small invisible iframe via st.components.v1.html: Streamlit
+    # strips <script> tags from st.markdown, but components.v1.html runs
+    # JS in a same-origin iframe and from there we can find DOM nodes in
+    # the parent page. Same trick the loading overlay uses.
+    components.html(
+        """
+        <script>
+        (function(){
+            const KEY = 'afl-kpi-countup-done';
+            const findInParent = () => {
+                try {
+                    return window.parent.document.querySelectorAll('.pkpi-countup');
+                } catch(e) { return []; }
+            };
+            let attempts = 0;
+            const tryStart = () => {
+                const targets = findInParent();
+                if (targets.length === 0 && attempts < 40) {
+                    attempts += 1;
+                    setTimeout(tryStart, 50);
+                    return;
+                }
+                if (targets.length === 0) return;
+                // sessionStorage lives on the parent window — read/write through it
+                let done = false;
+                try { done = window.parent.sessionStorage.getItem(KEY) === '1'; } catch(e) {}
+                if (done) return;  // already animated this session, leave static
+                // Animate each target 0 → its data-target value
+                const DURATION = 1100;  // ms — feels deliberate without dragging
+                const start = performance.now();
+                // Snapshot each target's final value + decimals up-front
+                const items = Array.from(targets).map(el => ({
+                    el: el,
+                    target: parseFloat(el.dataset.target),
+                    decimals: parseInt(el.dataset.decimals || '0', 10),
+                }));
+                // Initialise to 0 so the count starts from there
+                items.forEach(it => { it.el.textContent = (0).toFixed(it.decimals); });
+                const easeOut = t => 1 - Math.pow(1 - t, 3);  // cubic ease-out — fast start, soft landing
+                const step = () => {
+                    const elapsed = performance.now() - start;
+                    const t = Math.min(1, elapsed / DURATION);
+                    const eased = easeOut(t);
+                    items.forEach(it => {
+                        const cur = it.target * eased;
+                        it.el.textContent = cur.toFixed(it.decimals);
+                    });
+                    if (t < 1) {
+                        requestAnimationFrame(step);
+                    } else {
+                        // Snap to exact target values so we don't display
+                        // floating-point garbage at the end
+                        items.forEach(it => {
+                            it.el.textContent = it.target.toFixed(it.decimals);
+                        });
+                        try { window.parent.sessionStorage.setItem(KEY, '1'); } catch(e) {}
+                    }
+                };
+                requestAnimationFrame(step);
+            };
+            // Wait for the DOM to settle then look for our targets
+            setTimeout(tryStart, 40);
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -11328,15 +11555,22 @@ def main():
             # ── HERO MODULE — frames the KPI strip as the headline asset ──
             # Wraps render_performance_kpi_strip in its own bordered card
             # with an eyebrow above and the accent rail running down the
-            # left edge. Distinguishes the KPI strip from the section
-            # blocks below — this is THE headline, the others are chapters.
-            st.markdown(_h("""
+            # left edge. The right-side status line shows MODEL ONLINE with
+            # a pulsing dot and the real load timestamp — signals system
+            # state, not decoration. Pulled from `now_stamp` so each page
+            # load reflects when this snapshot of metrics was computed.
+            st.markdown(_h(f"""
             <div class="perf-hero">
               <div class="perf-hero-rail"></div>
               <div class="perf-hero-eyebrow">
                 <span class="perf-hero-eyebrow-glyph">◆</span>
                 <span class="perf-hero-eyebrow-lbl">Headline Metrics</span>
-                <span class="perf-hero-eyebrow-sub">Season-wide signals · updated each round</span>
+                <span class="perf-hero-status">
+                  <span class="perf-hero-status-dot"></span>
+                  <span class="perf-hero-status-lbl">MODEL ONLINE</span>
+                  <span class="perf-hero-status-sep">·</span>
+                  <span class="perf-hero-status-time">LAST RUN {now_stamp} AWST</span>
+                </span>
               </div>
             """), unsafe_allow_html=True)
             render_performance_kpi_strip(tracker)
@@ -11540,5 +11774,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

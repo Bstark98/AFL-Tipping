@@ -128,6 +128,18 @@ TEAM_NAME_ALIASES = {
     "Port": "Port Adelaide",
     "West Coast Eagles": "West Coast",
     "Bulldogs": "Western Bulldogs",
+    # ── Sir Doug Nicholls Round Indigenous names (Rounds 10-11) ──
+    # Six clubs adopt Indigenous-language names during SDNR. These aliases
+    # normalise the Indigenous name back to the canonical club name so any
+    # code path that sees them as plain text (headers, captions, summaries)
+    # routes correctly into our team-colour/logo/abbr lookups.
+    "Kuwarna": "Adelaide",                  # Kaurna — translation of "Crows"
+    "Walyalup": "Fremantle",                # Noongar — Fremantle region
+    "Narrm": "Melbourne",                   # Woi Wurrung — Melbourne
+    "Naarm": "Melbourne",                   # alt media spelling
+    "Yartapuulti": "Port Adelaide",         # Kaurna — Port River lands
+    "Euro-Yroke": "St Kilda",               # Boon Wurrung — St Kilda
+    "Waalitj Marawar": "West Coast",        # Noongar — Eagles of the West
 }
 
 # ── H2H FEATURE — name & stat mappings ──
@@ -349,6 +361,13 @@ def ladder_mini(team_name, standings_lookup):
 FW_TEAM_SLUG_TO_NAME = {
     "adelaide-crows":           "Adelaide",
     "adelaide":                 "Adelaide",
+    # ── Sir Doug Nicholls Round Indigenous names (Rounds 10-11) ──
+    # During SDNR, six clubs adopt Indigenous-language names on Footywire's
+    # selections page. Without these aliases, the slug lookup fails and the
+    # entire match gets skipped. Variants cover both bare Indigenous name
+    # and any nickname/hyphen combinations Footywire might use.
+    "kuwarna":                  "Adelaide",
+    "kuwarna-crows":            "Adelaide",
     "brisbane-lions":           "Brisbane Lions",
     "brisbane":                 "Brisbane Lions",
     "carlton-blues":            "Carlton",
@@ -359,6 +378,8 @@ FW_TEAM_SLUG_TO_NAME = {
     "essendon":                 "Essendon",
     "fremantle-dockers":        "Fremantle",
     "fremantle":                "Fremantle",
+    "walyalup":                 "Fremantle",         # SDNR Indigenous name
+    "walyalup-dockers":         "Fremantle",
     "geelong-cats":             "Geelong",
     "geelong":                  "Geelong",
     "gold-coast-suns":          "Gold Coast",
@@ -371,19 +392,28 @@ FW_TEAM_SLUG_TO_NAME = {
     "hawthorn":                 "Hawthorn",
     "melbourne-demons":         "Melbourne",
     "melbourne":                "Melbourne",
+    "narrm":                    "Melbourne",         # SDNR Indigenous name (Woi Wurrung)
+    "narrm-demons":             "Melbourne",
+    "naarm":                    "Melbourne",         # alt spelling occasionally seen in media
     "north-melbourne-kangaroos":"North Melbourne",
     "north-melbourne":          "North Melbourne",
     "kangaroos":                "North Melbourne",
     "port-adelaide-power":      "Port Adelaide",
     "port-adelaide":            "Port Adelaide",
+    "yartapuulti":              "Port Adelaide",     # SDNR Indigenous name
+    "yartapuulti-power":        "Port Adelaide",
     "richmond-tigers":          "Richmond",
     "richmond":                 "Richmond",
     "st-kilda-saints":          "St Kilda",
     "st-kilda":                 "St Kilda",
+    "euro-yroke":               "St Kilda",          # SDNR Indigenous name (Boon Wurrung)
+    "euro-yroke-saints":        "St Kilda",
     "sydney-swans":             "Sydney",
     "sydney":                   "Sydney",
     "west-coast-eagles":        "West Coast",
     "west-coast":               "West Coast",
+    "waalitj-marawar":          "West Coast",        # SDNR Indigenous name (Noongar)
+    "waalitj-marawar-eagles":   "West Coast",
     "western-bulldogs":         "Western Bulldogs",
     "bulldogs":                 "Western Bulldogs",
 }
@@ -556,6 +586,18 @@ def _fw_compute_team_pcts(rankings):
             e["price_pct"] = 1.0 if size == 1 else 1.0 - i / (size - 1)
 
 def _fw_is_side_panel(table):
+    """Detect a team selections side panel.
+
+    A side panel always has 'Interchange' (every team has interchange
+    players) plus at least one other section label. The original check
+    required Ins OR Outs specifically, but that fails when a team goes
+    in unchanged — like North Melbourne in Round 10 2026, where the
+    panel only contained 'Interchange' and 'Emergencies'. The match
+    then rendered only one team's selections.
+
+    The looser check (Interchange + any other label) is still tight
+    enough to reject unrelated tables — no non-panel table is going to
+    have two of {Interchange, Emergencies, Ins, Outs} as bold headings."""
     headings = set()
     for tr in _fw_direct_rows(table):
         b = tr.find("b")
@@ -563,7 +605,7 @@ def _fw_is_side_panel(table):
             label = b.get_text(strip=True)
             if label in _FW_SECTION_LABELS:
                 headings.add(label)
-    return "Interchange" in headings and bool(headings & {"Ins", "Outs"})
+    return "Interchange" in headings and len(headings) >= 2
 
 def _fw_parse_side_panel(panel):
     current_section = None
@@ -2873,6 +2915,367 @@ def rank_models(games_subset, all_tips, sources):
             weights[model] = acc
     rows.sort(key=lambda x: (-x[1], -x[2], x[0]))
     return [r[0] for r in rows[:6]], weights, rows
+
+
+def compute_model_quadrant_stats(games_subset, all_tips, sources, tracker=None,
+                                 min_tips=20):
+    """For each industry model + our consensus, compute (strike_rate, MAE)
+    points for a 2D scatter plot.
+
+    Each Squiggle source returns predicted margins per game, and we have
+    actual game margins. So per-model MAE = mean(|predicted_margin - actual_margin_from_tipped_team_pov|)
+    across every completed game that model tipped.
+
+    For our consensus model, we use the existing tracker (which already
+    has margin_error per game derived the same way) — this guarantees our
+    point on the chart is computed from the *same* methodology as the
+    industry points. Apples to apples.
+
+    `min_tips` filters out models with so few completed tips that their
+    numbers would be noise. 20 is roughly two rounds of footy.
+
+    Returns: list of dicts with keys: label, strike_rate, mae, is_ours, sample_n.
+    Industry models get label='' so the chart never reveals their identity —
+    you wanted to refer to them generically as 'other industry tipping models'.
+    """
+    gmap = {g["id"]: g for g in games_subset}
+    per_model = defaultdict(lambda: {"correct": 0, "total": 0,
+                                     "margin_err_sum": 0.0, "margin_n": 0})
+    seen = set()
+    for tip in all_tips:
+        gid, sid = tip["gameid"], tip["sourceid"]
+        if (gid, sid) in seen or gid not in gmap:
+            continue
+        seen.add((gid, sid))
+        game = gmap[gid]
+        actual = get_actual_result(game)
+        if actual is None:
+            continue
+        try:
+            hs, as_ = float(game["hscore"]), float(game["ascore"])
+        except Exception:
+            continue
+        model = sources[sid]
+        per_model[model]["total"] += 1
+        # Strike — drawn games credit both tippers (AFL convention)
+        if actual == "Draw" or str(tip.get("tip", "")).strip().lower() == actual.strip().lower():
+            per_model[model]["correct"] += 1
+        # Margin — compute the model's predicted margin error vs actual.
+        # `tip["margin"]` is the predicted margin from the tipped team's
+        # perspective (Squiggle convention). The actual margin from that
+        # team's perspective is +hscore-ascore if the tipped team is home,
+        # otherwise +ascore-hscore.
+        try:
+            pred_margin = float(tip.get("margin", 0))
+        except (TypeError, ValueError):
+            pred_margin = None
+        if pred_margin is not None:
+            tipped_team = str(tip.get("tip", "")).strip()
+            home_team = str(game.get("hteam", "")).strip()
+            if tipped_team.lower() == home_team.lower():
+                actual_margin = hs - as_
+            else:
+                actual_margin = as_ - hs
+            err = abs(pred_margin - actual_margin)
+            per_model[model]["margin_err_sum"] += err
+            per_model[model]["margin_n"] += 1
+
+    points = []
+    for model, s in per_model.items():
+        if s["total"] < min_tips:
+            continue
+        strike = s["correct"] / s["total"] * 100
+        mae = (s["margin_err_sum"] / s["margin_n"]) if s["margin_n"] > 0 else None
+        if mae is None:  # skip models without margin data — no Y coord
+            continue
+        points.append({
+            "label": "",
+            "strike_rate": strike,
+            "mae": mae,
+            "is_ours": False,
+            "sample_n": s["total"],
+        })
+
+    # ── Our consensus model — pulled from the tracker so it uses the
+    # same margin_error convention everything else on the page uses.
+    if tracker:
+        our_games = [g for r in tracker for g in r["games"]]
+        if our_games:
+            our_n = len(our_games)
+            our_correct = sum(1 for g in our_games if g["correct"])
+            our_margin = [g["margin_error"] for g in our_games if g.get("margin_error") is not None]
+            if our_n >= min_tips and our_margin:
+                points.append({
+                    "label": "OURS",
+                    "strike_rate": our_correct / our_n * 100,
+                    "mae": sum(our_margin) / len(our_margin),
+                    "is_ours": True,
+                    "sample_n": our_n,
+                })
+    return points
+
+
+def render_model_quadrant(year, current_round, sources, tracker):
+    """2D scatter chart positioning our consensus model against other
+    industry tipping models on two axes:
+       X — Strike Rate (% of correct tips)
+       Y — Margin Precision (inverted MAE so up=better)
+
+    Top-right quadrant is the goal: high strike + low MAE = elite.
+
+    No model names are exposed in the chart. Other tippers appear as
+    unlabelled grey dots — we never reference them by source. Our dot
+    is bright green, ringed, and the only one with a 'OURS' label.
+
+    Renders nothing if there's insufficient data (early-season, before
+    enough completed games to make the picture meaningful)."""
+    # Pull completed games for this season + all tips
+    season_games = filter_before(get_all_games(year), current_round) if current_round > 0 else \
+                   filter_completed(get_all_games(year - 1))
+    season_tips = get_all_tips(year) if current_round > 0 else get_all_tips(year - 1)
+    if not season_games or not season_tips:
+        return
+
+    points = compute_model_quadrant_stats(
+        season_games, season_tips, sources,
+        tracker=tracker, min_tips=20,
+    )
+    # Need at least 4 points (us + 3 others) to make a meaningful scatter
+    if len(points) < 4:
+        return
+
+    # Find "OURS" point + industry points
+    our_pt = next((p for p in points if p["is_ours"]), None)
+    industry_pts = [p for p in points if not p["is_ours"]]
+    if not our_pt or not industry_pts:
+        return
+
+    # Compute axis bounds from actual data with comfortable padding so
+    # points don't hug the edges. Median lines split the field into
+    # quadrants. Axis ranges are computed once and used by both the
+    # background grid and the point positioning.
+    strikes = [p["strike_rate"] for p in points]
+    maes    = [p["mae"] for p in points]
+    s_min, s_max = min(strikes), max(strikes)
+    m_min, m_max = min(maes), max(maes)
+    s_pad = max(2.0, (s_max - s_min) * 0.12)
+    m_pad = max(1.5, (m_max - m_min) * 0.12)
+    X_MIN, X_MAX = s_min - s_pad, s_max + s_pad
+    Y_MIN, Y_MAX = m_min - m_pad, m_max + m_pad
+
+    # Median split lines — sit at the median of each axis so the field
+    # divides into top-left/top-right/bottom-left/bottom-right quadrants
+    # of roughly equal model counts.
+    sorted_s = sorted(strikes)
+    sorted_m = sorted(maes)
+    s_med = sorted_s[len(sorted_s) // 2]
+    m_med = sorted_m[len(sorted_m) // 2]
+
+    # SVG dimensions — designed for ~360-500px container widths. Uses
+    # preserveAspectRatio so it scales smoothly on phone and tablet.
+    W, H = 360, 280
+    PAD_L, PAD_R, PAD_T, PAD_B = 38, 18, 22, 32
+
+    def _x(strike): return PAD_L + (strike - X_MIN) / (X_MAX - X_MIN) * (W - PAD_L - PAD_R)
+    # Y axis is inverted so LOWER MAE appears HIGHER on screen. That puts
+    # the "elite" combination (high strike, low MAE) in the top-right
+    # quadrant, which is the conventional reading position for "best."
+    def _y(mae):
+        return PAD_T + (Y_MAX - mae) / (Y_MAX - Y_MIN) * (H - PAD_T - PAD_B)
+
+    # Build axis tick values (~4 ticks per axis at clean intervals)
+    def _nice_ticks(low, high, target=4):
+        """Pick clean integer-rounded tick marks across the range."""
+        rng = high - low
+        if rng <= 0:
+            return [low]
+        # Pick step that gives ~target ticks
+        raw_step = rng / target
+        # Snap to a nice value: 1, 2, 5, 10, 20, 50 ... scaled to magnitude
+        import math
+        magnitude = 10 ** math.floor(math.log10(raw_step))
+        for mult in (1, 2, 5, 10):
+            step = mult * magnitude
+            if rng / step <= target * 1.5:
+                break
+        first = math.ceil(low / step) * step
+        ticks = []
+        v = first
+        while v <= high + step * 0.01:
+            ticks.append(round(v, 1))
+            v += step
+        return ticks
+
+    x_ticks = _nice_ticks(X_MIN, X_MAX, target=4)
+    y_ticks = _nice_ticks(Y_MIN, Y_MAX, target=4)
+
+    # Build the SVG. Layered bottom-up:
+    #   1. Grid lines (faint)
+    #   2. Median quadrant lines (a touch brighter, dashed)
+    #   3. "ELITE" quadrant subtle tint in the top-right
+    #   4. Industry points (small grey dots)
+    #   5. Our point (large green dot with ring + label)
+    #   6. Axis ticks + labels
+    parts = [
+        f'<svg class="perf-quad" viewBox="0 0 {W} {H}" '
+        f'     preserveAspectRatio="xMidYMid meet" '
+        f'     xmlns="http://www.w3.org/2000/svg" '
+        f'     role="img" aria-label="Model performance ranking quadrant">'
+    ]
+    # Frame
+    parts.append(
+        f'<rect class="perf-quad-frame" x="{PAD_L}" y="{PAD_T}" '
+        f'      width="{W-PAD_L-PAD_R}" height="{H-PAD_T-PAD_B}"/>'
+    )
+    # Elite quadrant tint (top-right = high strike + low MAE)
+    # In our coords: x > s_med AND y < (where m_med maps to)
+    elite_x = _x(s_med)
+    elite_y = _y(m_med)
+    parts.append(
+        f'<rect class="perf-quad-elite" '
+        f'      x="{elite_x:.1f}" y="{PAD_T}" '
+        f'      width="{(W-PAD_R) - elite_x:.1f}" '
+        f'      height="{elite_y - PAD_T:.1f}"/>'
+    )
+    # Faint grid lines
+    for t in x_ticks:
+        x_pos = _x(t)
+        if PAD_L <= x_pos <= W - PAD_R:
+            parts.append(
+                f'<line class="perf-quad-grid" '
+                f'      x1="{x_pos:.1f}" y1="{PAD_T}" '
+                f'      x2="{x_pos:.1f}" y2="{H-PAD_B}"/>'
+            )
+    for t in y_ticks:
+        y_pos = _y(t)
+        if PAD_T <= y_pos <= H - PAD_B:
+            parts.append(
+                f'<line class="perf-quad-grid" '
+                f'      x1="{PAD_L}" y1="{y_pos:.1f}" '
+                f'      x2="{W-PAD_R}" y2="{y_pos:.1f}"/>'
+            )
+    # Median split lines (dashed)
+    parts.append(
+        f'<line class="perf-quad-median" '
+        f'      x1="{elite_x:.1f}" y1="{PAD_T}" '
+        f'      x2="{elite_x:.1f}" y2="{H-PAD_B}"/>'
+    )
+    parts.append(
+        f'<line class="perf-quad-median" '
+        f'      x1="{PAD_L}" y1="{elite_y:.1f}" '
+        f'      x2="{W-PAD_R}" y2="{elite_y:.1f}"/>'
+    )
+    # ELITE label in top-right quadrant corner
+    parts.append(
+        f'<text class="perf-quad-elite-lbl" '
+        f'      x="{W-PAD_R-6:.1f}" y="{PAD_T+12}" '
+        f'      text-anchor="end">ELITE</text>'
+    )
+
+    # Industry points — quiet grey
+    for p in industry_pts:
+        cx, cy = _x(p["strike_rate"]), _y(p["mae"])
+        parts.append(
+            f'<circle class="perf-quad-other" '
+            f'        cx="{cx:.1f}" cy="{cy:.1f}" r="3.4"/>'
+        )
+
+    # Our point — large, ringed, glowing. Draw the outer halo first.
+    our_x, our_y = _x(our_pt["strike_rate"]), _y(our_pt["mae"])
+    parts.append(
+        f'<circle class="perf-quad-ours-halo" '
+        f'        cx="{our_x:.1f}" cy="{our_y:.1f}" r="14"/>'
+    )
+    parts.append(
+        f'<circle class="perf-quad-ours-ring" '
+        f'        cx="{our_x:.1f}" cy="{our_y:.1f}" r="8.5"/>'
+    )
+    parts.append(
+        f'<circle class="perf-quad-ours" '
+        f'        cx="{our_x:.1f}" cy="{our_y:.1f}" r="5.2"/>'
+    )
+    # Label for our point — positioned to avoid axis edges
+    lbl_x = our_x + 11
+    lbl_anchor = 'start'
+    if our_x > W - PAD_R - 50:
+        lbl_x = our_x - 11
+        lbl_anchor = 'end'
+    parts.append(
+        f'<text class="perf-quad-ours-lbl" '
+        f'      x="{lbl_x:.1f}" y="{our_y+1:.1f}" '
+        f'      text-anchor="{lbl_anchor}" dominant-baseline="middle">OURS</text>'
+    )
+
+    # X-axis ticks + labels
+    for t in x_ticks:
+        x_pos = _x(t)
+        if PAD_L <= x_pos <= W - PAD_R:
+            parts.append(
+                f'<text class="perf-quad-tick-x" '
+                f'      x="{x_pos:.1f}" y="{H-PAD_B+12}" '
+                f'      text-anchor="middle">{int(round(t))}%</text>'
+            )
+    # X-axis title
+    parts.append(
+        f'<text class="perf-quad-axis-title" '
+        f'      x="{(PAD_L+W-PAD_R)/2:.1f}" y="{H-6}" '
+        f'      text-anchor="middle">STRIKE RATE →</text>'
+    )
+
+    # Y-axis ticks + labels
+    for t in y_ticks:
+        y_pos = _y(t)
+        if PAD_T <= y_pos <= H - PAD_B:
+            parts.append(
+                f'<text class="perf-quad-tick-y" '
+                f'      x="{PAD_L-6}" y="{y_pos+3:.1f}" '
+                f'      text-anchor="end">{int(round(t))}</text>'
+            )
+    # Y-axis title (rotated)
+    parts.append(
+        f'<text class="perf-quad-axis-title" '
+        f'      x="-{(PAD_T+H-PAD_B)/2:.1f}" y="11" '
+        f'      text-anchor="middle" transform="rotate(-90)">← MARGIN ERROR (PTS)</text>'
+    )
+
+    parts.append('</svg>')
+    svg = "\n".join(parts)
+
+    # Build a small legend below the chart with sample size context
+    our_strike_str = f"{our_pt['strike_rate']:.1f}%"
+    our_mae_str = f"{our_pt['mae']:.1f}pts"
+    industry_n = len(industry_pts)
+    legend_html = (
+        f'<div class="perf-quad-legend">'
+        f'  <div class="perf-quad-legend-row">'
+        f'    <span class="perf-quad-legend-dot perf-quad-legend-dot-ours"></span>'
+        f'    <span class="perf-quad-legend-lbl">OUR MODEL</span>'
+        f'    <span class="perf-quad-legend-sep">·</span>'
+        f'    <span class="perf-quad-legend-val">{our_strike_str} STRIKE</span>'
+        f'    <span class="perf-quad-legend-sep">·</span>'
+        f'    <span class="perf-quad-legend-val">{our_mae_str} MAE</span>'
+        f'  </div>'
+        f'  <div class="perf-quad-legend-row perf-quad-legend-row-quiet">'
+        f'    <span class="perf-quad-legend-dot perf-quad-legend-dot-other"></span>'
+        f'    <span class="perf-quad-legend-lbl">OTHER INDUSTRY TIPPING MODELS</span>'
+        f'    <span class="perf-quad-legend-sep">·</span>'
+        f'    <span class="perf-quad-legend-val">{industry_n} BENCHMARKED</span>'
+        f'  </div>'
+        f'</div>'
+    )
+
+    st.markdown(_h(f"""
+    <div class="perf-quad-wrap">
+      <div class="perf-quad-eyebrow">
+        <span class="perf-quad-eyebrow-glyph">◇</span>
+        <span class="perf-quad-eyebrow-lbl">Benchmark Position</span>
+        <span class="perf-quad-eyebrow-sub">vs other industry tipping models · season to date</span>
+      </div>
+      {svg}
+      {legend_html}
+    </div>
+    """), unsafe_allow_html=True)
+
 
 def get_top_models(ty, tr, sources):
     if tr == 0:
@@ -9473,6 +9876,344 @@ st.markdown("""
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+   PERFORMANCE TAB — ELITE DISCIPLINE
+   Stripped back from earlier versions: no hero card, no numbered chapter
+   headers, no progressing accent colours, no closing ledger row. The data
+   itself is the hero. The framing is barely visible. Bloomberg's rule:
+   the more premium the surface, the less it asks for your attention.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Banner variant without the duplicated strike rate. Just announces the
+   tab. Strike rate already lives in the home hero ticker and the bottom
+   status bar — showing it a third time clutters the field. */
+.perf-feed-clean .perf-feed-l{
+    gap:9px;
+}
+
+/* Quiet section divider. Replaces the numbered chapter headers with a
+   thin rule + small label. Stops competing with the data below. */
+.perf-div{
+    position:relative;
+    margin:34px 14px 14px;
+    height:11px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+}
+.perf-div::before,
+.perf-div::after{
+    content:'';
+    flex:1;
+    height:1px;
+    background:linear-gradient(90deg,
+        transparent,
+        rgba(255,255,255,0.07) 30%,
+        rgba(255,255,255,0.07) 70%,
+        transparent);
+}
+.perf-div-lbl{
+    font-family:var(--mono);
+    font-size:0.5rem;
+    font-weight:700;
+    letter-spacing:0.2em;
+    color:var(--text2);
+    text-transform:uppercase;
+    padding:0 12px;
+    background:transparent;
+    white-space:nowrap;
+}
+
+/* MARGIN PRECISION + CONFIDENCE EDGE — 2-up tight pair. Replaces the
+   old 3-block KPI strip (which led with the duplicated strike rate). */
+.perf-stat-pair{
+    margin:14px 14px 0;
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+}
+.perf-stat-card{
+    padding:14px 14px 12px;
+    background:linear-gradient(180deg,
+        rgba(255,255,255,0.018) 0%,
+        rgba(5,5,10,0.0) 100%);
+    border:1px solid var(--border);
+    border-radius:8px;
+    font-family:var(--mono);
+    position:relative;
+    overflow:hidden;
+}
+.perf-stat-card::before{
+    /* Faint top accent line — Bloomberg-style cell topper */
+    content:'';
+    position:absolute;
+    top:0; left:14px; right:14px;
+    height:1px;
+    background:linear-gradient(90deg,
+        transparent,
+        rgba(52,211,153,0.4),
+        transparent);
+}
+.perf-stat-lbl{
+    font-size:0.5rem;
+    font-weight:800;
+    letter-spacing:0.18em;
+    color:var(--text2);
+    text-transform:uppercase;
+    line-height:1;
+    margin-bottom:9px;
+}
+.perf-stat-val{
+    font-size:1.85rem;
+    font-weight:800;
+    color:var(--white);
+    line-height:1;
+    letter-spacing:-0.035em;
+    font-variant-numeric:tabular-nums;
+    margin-bottom:6px;
+}
+.perf-stat-unit{
+    font-size:0.65rem;
+    font-weight:700;
+    color:var(--text2);
+    letter-spacing:0.04em;
+    margin-left:3px;
+    vertical-align:0.45em;
+}
+.perf-stat-sub{
+    font-size:0.46rem;
+    font-weight:600;
+    letter-spacing:0.08em;
+    color:var(--text3);
+    text-transform:uppercase;
+    line-height:1.3;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   BENCHMARK QUADRANT CHART
+   2D scatter showing our model vs other industry tipping models. The
+   single highest-confidence visual on the page — punters can see at a
+   glance where we sit. Top-right is elite (high strike, low MAE).
+   ════════════════════════════════════════════════════════════════════════ */
+.perf-quad-wrap{
+    margin:16px 14px 0;
+    padding:16px 14px 14px;
+    background:linear-gradient(180deg,
+        rgba(52,211,153,0.02) 0%,
+        rgba(5,5,10,0.0) 60%);
+    border:1px solid var(--border);
+    border-radius:10px;
+    position:relative;
+    overflow:hidden;
+}
+.perf-quad-wrap::before{
+    /* Top accent edge — same family as the perf-stat-card */
+    content:'';
+    position:absolute;
+    top:0; left:16px; right:16px;
+    height:1px;
+    background:linear-gradient(90deg,
+        transparent,
+        rgba(52,211,153,0.55) 20%,
+        rgba(52,211,153,0.55) 80%,
+        transparent);
+}
+.perf-quad-eyebrow{
+    display:flex;
+    align-items:baseline;
+    gap:9px;
+    margin-bottom:10px;
+    flex-wrap:wrap;
+}
+.perf-quad-eyebrow-glyph{
+    color:var(--green);
+    font-size:0.65rem;
+    line-height:1;
+    text-shadow:0 0 6px rgba(52,211,153,0.5);
+}
+.perf-quad-eyebrow-lbl{
+    font-family:var(--mono);
+    font-size:0.66rem;
+    font-weight:800;
+    letter-spacing:0.16em;
+    color:var(--white);
+    text-transform:uppercase;
+    line-height:1;
+}
+.perf-quad-eyebrow-sub{
+    font-family:var(--mono);
+    font-size:0.46rem;
+    font-weight:600;
+    letter-spacing:0.06em;
+    color:var(--text3);
+    text-transform:uppercase;
+    line-height:1;
+}
+
+/* SVG-level styling. All graphical elements rendered server-side; CSS
+   handles colours and stroke widths so theme tweaks live in one place. */
+.perf-quad{
+    width:100%;
+    height:auto;
+    display:block;
+    margin:6px 0 4px;
+    font-family:var(--mono);
+}
+.perf-quad-frame{
+    fill:none;
+    stroke:rgba(255,255,255,0.06);
+    stroke-width:1;
+}
+.perf-quad-elite{
+    fill:rgba(52,211,153,0.045);
+    pointer-events:none;
+}
+.perf-quad-grid{
+    stroke:rgba(255,255,255,0.04);
+    stroke-width:0.6;
+    pointer-events:none;
+}
+.perf-quad-median{
+    stroke:rgba(255,255,255,0.14);
+    stroke-width:0.8;
+    stroke-dasharray:3 3;
+    pointer-events:none;
+}
+.perf-quad-elite-lbl{
+    font-size:7.5px;
+    font-weight:800;
+    fill:rgba(52,211,153,0.55);
+    letter-spacing:0.2em;
+    text-transform:uppercase;
+}
+/* Industry models — quiet grey dots, no labels. We never expose source
+   identities; they're a generic benchmark cloud. */
+.perf-quad-other{
+    fill:rgba(180,190,210,0.32);
+    stroke:rgba(180,190,210,0.55);
+    stroke-width:0.8;
+}
+/* Our point — the hero. Halo + ring + filled core for depth. */
+.perf-quad-ours-halo{
+    fill:rgba(52,211,153,0.08);
+    stroke:none;
+    animation:perf-quad-pulse 2.8s ease-in-out infinite;
+    transform-origin:center;
+    transform-box:fill-box;
+}
+.perf-quad-ours-ring{
+    fill:none;
+    stroke:rgba(52,211,153,0.55);
+    stroke-width:1.2;
+}
+.perf-quad-ours{
+    fill:#22d39e;
+    stroke:#06060a;
+    stroke-width:1.2;
+    filter:drop-shadow(0 0 6px rgba(52,211,153,0.65));
+}
+@keyframes perf-quad-pulse{
+    0%, 100% {opacity:1; transform:scale(1);}
+    50%      {opacity:0.4; transform:scale(1.15);}
+}
+@media (prefers-reduced-motion: reduce){
+    .perf-quad-ours-halo{animation:none;}
+}
+.perf-quad-ours-lbl{
+    font-size:8px;
+    font-weight:800;
+    fill:rgba(52,211,153,0.95);
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+}
+.perf-quad-tick-x,
+.perf-quad-tick-y{
+    font-size:7px;
+    font-weight:600;
+    fill:rgba(160,170,185,0.6);
+    letter-spacing:0.04em;
+}
+.perf-quad-axis-title{
+    font-size:7px;
+    font-weight:700;
+    fill:rgba(160,170,185,0.75);
+    letter-spacing:0.18em;
+    text-transform:uppercase;
+}
+
+/* Legend below the chart — explains the dot colours + shows our actual
+   numbers + sample size for the benchmark cloud. */
+.perf-quad-legend{
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid rgba(255,255,255,0.05);
+    display:flex;
+    flex-direction:column;
+    gap:5px;
+}
+.perf-quad-legend-row{
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:7px;
+    font-family:var(--mono);
+    font-size:0.5rem;
+    font-weight:700;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    line-height:1.4;
+}
+.perf-quad-legend-row-quiet{
+    opacity:0.7;
+}
+.perf-quad-legend-dot{
+    width:9px; height:9px;
+    border-radius:50%;
+    flex-shrink:0;
+}
+.perf-quad-legend-dot-ours{
+    background:#22d39e;
+    box-shadow:0 0 5px rgba(52,211,153,0.55);
+}
+.perf-quad-legend-dot-other{
+    background:rgba(180,190,210,0.45);
+    border:1px solid rgba(180,190,210,0.65);
+}
+.perf-quad-legend-lbl{
+    color:var(--white);
+    font-weight:800;
+    letter-spacing:0.14em;
+}
+.perf-quad-legend-val{
+    color:var(--text2);
+    font-variant-numeric:tabular-nums;
+    letter-spacing:0.04em;
+}
+.perf-quad-legend-sep{
+    color:var(--border3);
+    opacity:0.55;
+    font-weight:400;
+}
+
+/* ── MOBILE — Performance tab tightens for phone widths ── */
+@media (max-width:520px){
+    .perf-stat-pair{
+        margin:12px 12px 0;
+        gap:8px;
+    }
+    .perf-stat-card{padding:11px 11px 10px;}
+    .perf-stat-val{font-size:1.55rem;}
+    .perf-stat-unit{font-size:0.55rem;}
+    .perf-stat-lbl{font-size:0.46rem; letter-spacing:0.14em;}
+    .perf-stat-sub{font-size:0.42rem;}
+    .perf-div{margin:24px 12px 10px;}
+    .perf-div-lbl{font-size:0.44rem; padding:0 10px;}
+    .perf-quad-wrap{margin:12px 12px 0; padding:12px 10px 10px;}
+    .perf-quad-eyebrow-lbl{font-size:0.6rem;}
+    .perf-quad-eyebrow-sub{display:none;}
+    .perf-quad-legend-row{font-size:0.44rem; gap:5px;}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
    PERFORMANCE TAB PREMIUM POLISH
    Restructured around Bloomberg-terminal hierarchy: real numbers in the
    banner, big KPI strip below, then editorial sections separated by thin
@@ -9690,268 +10431,6 @@ st.markdown("""
     font-size:0.66rem !important;
     font-weight:800 !important;
     letter-spacing:0.2em !important;
-}
-
-/* ════════════════════════════════════════════════════════════════════════
-   PREMIUM EDITORIAL SYSTEM — Performance tab
-   Three structural elements that frame the existing components as a
-   cohesive premium document rather than a vertical stack of widgets:
-     • .perf-hero — wraps the KPI strip as the headline asset, with its
-       own eyebrow header and accent rail
-     • .perf-section — numbered, captioned section headers with a
-       progressing accent tone (blue → cyan → purple → green) so the
-       page reads as an editorial journey
-     • .perf-ledger-close — the bookend balance-sheet summary, like the
-       bottom-line totals of a quarterly report
-   ════════════════════════════════════════════════════════════════════════ */
-
-/* ── HERO MODULE ──
-   Wraps the KPI strip in its own framed container with an eyebrow
-   header. The accent rail along the left edge is a Bloomberg cue —
-   it says "this is the headline, the rest is supporting evidence." */
-.perf-hero{
-    position:relative;
-    margin:18px 14px 0;
-    padding:14px 16px 4px;
-    background:linear-gradient(180deg,
-        rgba(52,211,153,0.025) 0%,
-        rgba(5,5,10,0.0) 60%);
-    border:1px solid rgba(52,211,153,0.20);
-    border-radius:12px;
-    /* Inset the KPI strip's existing margins so it sits flush inside
-       this hero frame instead of stacking double-margins. */
-    overflow:hidden;
-    animation:fadeUp 0.55s ease both;
-    animation-delay:0.03s;
-}
-.perf-hero .pkpi-strip{
-    /* Override the KPI strip's outer margins when nested inside .perf-hero
-       so it fills the hero card cleanly rather than floating inside it. */
-    margin:10px 0 4px !important;
-}
-.perf-hero-rail{
-    position:absolute;
-    top:14px; bottom:14px; left:0;
-    width:3px;
-    border-radius:0 3px 3px 0;
-    background:linear-gradient(180deg,
-        rgba(79,143,255,0.6) 0%,
-        rgba(34,211,238,0.7) 50%,
-        rgba(52,211,153,0.6) 100%);
-    box-shadow:0 0 12px rgba(34,211,238,0.35);
-}
-.perf-hero-eyebrow{
-    display:flex; align-items:baseline;
-    gap:10px;
-    padding-left:8px;
-    margin-bottom:0;
-}
-.perf-hero-eyebrow-glyph{
-    color:var(--green);
-    font-size:0.7rem;
-    line-height:1;
-    text-shadow:0 0 8px rgba(52,211,153,0.55);
-}
-.perf-hero-eyebrow-lbl{
-    font-family:var(--mono);
-    font-size:0.72rem;
-    font-weight:800;
-    letter-spacing:0.18em;
-    color:var(--white);
-    text-transform:uppercase;
-    line-height:1;
-}
-.perf-hero-eyebrow-sub{
-    font-family:var(--mono);
-    font-size:0.48rem;
-    font-weight:600;
-    letter-spacing:0.08em;
-    color:var(--text3);
-    text-transform:uppercase;
-    line-height:1;
-    margin-left:auto;
-}
-
-/* ── EDITORIAL SECTION HEADER ──
-   Numbered, captioned, accent-toned. Replaces the old simple divider
-   pattern with a proper chapter heading. Layout:
-     [number]  [title + caption]  [accent rule line]
-   The number is large, mono, tabular — gives the section a real
-   "Chapter 02" feel. The caption beneath sells the section in one line. */
-.perf-section{
-    display:grid;
-    grid-template-columns:auto 1fr;
-    align-items:start;
-    gap:14px;
-    margin:32px 14px 12px;
-    padding:14px 4px 12px;
-    position:relative;
-    animation:fadeUp 0.5s ease both;
-}
-.perf-section::before{
-    /* Top hairline — the section's accent rule runs across the full width */
-    content:'';
-    position:absolute;
-    top:0; left:0; right:0;
-    height:1px;
-    background:linear-gradient(90deg,
-        transparent 0%,
-        var(--section-accent, rgba(79,143,255,0.5)) 12%,
-        var(--section-accent, rgba(79,143,255,0.5)) 88%,
-        transparent 100%);
-}
-.perf-section-num{
-    font-family:var(--mono);
-    font-size:1.65rem;
-    font-weight:800;
-    letter-spacing:-0.04em;
-    line-height:1;
-    color:var(--section-accent, var(--accent));
-    text-shadow:0 0 14px var(--section-accent-glow, rgba(79,143,255,0.35));
-    font-variant-numeric:tabular-nums;
-    /* Slight negative top margin so the figure baselines with the title */
-    margin-top:-2px;
-    min-width:38px;
-}
-.perf-section-meta{
-    display:flex; flex-direction:column;
-    gap:3px;
-    min-width:0;
-}
-.perf-section-title{
-    font-family:var(--mono);
-    font-size:0.78rem;
-    font-weight:800;
-    letter-spacing:0.16em;
-    color:var(--white);
-    text-transform:uppercase;
-    line-height:1.1;
-}
-.perf-section-caption{
-    font-family:var(--mono);
-    font-size:0.5rem;
-    font-weight:600;
-    letter-spacing:0.04em;
-    color:var(--text2);
-    line-height:1.35;
-    text-transform:none;
-    /* Caption is set in normal case (not ALL CAPS) for readability —
-       gives the section a paragraph feel rather than another label. */
-    max-width:520px;
-}
-.perf-section-rule{
-    /* Just here to provide grid structure; styling lives on ::before */
-    display:none;
-}
-
-/* Per-tone accent palettes. Each section inherits its own --section-accent
-   custom property, used by the number colour, top hairline, and any
-   nested elements that opt in. Progression: blue → cyan → purple → green
-   reads as "analysis → trend → calibration → receipts." */
-.perf-section[data-tone="blue"]{
-    --section-accent:rgba(79,143,255,0.85);
-    --section-accent-glow:rgba(79,143,255,0.4);
-}
-.perf-section[data-tone="cyan"]{
-    --section-accent:rgba(34,211,238,0.85);
-    --section-accent-glow:rgba(34,211,238,0.4);
-}
-.perf-section[data-tone="purple"]{
-    --section-accent:rgba(167,139,250,0.85);
-    --section-accent-glow:rgba(167,139,250,0.4);
-}
-.perf-section[data-tone="green"]{
-    --section-accent:rgba(52,211,153,0.85);
-    --section-accent-glow:rgba(52,211,153,0.4);
-}
-
-/* ── CLOSING LEDGER LINE ──
-   Bookends the page with a one-line balance-sheet summary. Reads like
-   the totals row at the bottom of a financial statement — the period
-   close. Subtle but final: tells the user "this is the receipt." */
-.perf-ledger-close{
-    margin:36px 14px 14px;
-    padding:18px 14px 14px;
-    position:relative;
-    text-align:center;
-    font-family:var(--mono);
-}
-.perf-ledger-close-rule{
-    /* Double-rule pattern: a thicker accent line above, thin line just
-       below it. Echoes the visual idiom of audited financial totals. */
-    margin:0 auto 14px;
-    max-width:480px;
-    height:3px;
-    background:
-        linear-gradient(90deg,transparent, rgba(52,211,153,0.55), transparent) center / 100% 1px no-repeat,
-        linear-gradient(90deg,transparent, rgba(52,211,153,0.2),  transparent) center bottom / 100% 1px no-repeat;
-}
-.perf-ledger-close-row{
-    display:inline-flex;
-    flex-wrap:wrap;
-    justify-content:center;
-    align-items:baseline;
-    gap:9px;
-    font-size:0.56rem;
-    font-weight:800;
-    letter-spacing:0.14em;
-    text-transform:uppercase;
-    line-height:1.4;
-}
-.perf-ledger-close-lbl{
-    color:var(--text2);
-    font-weight:700;
-}
-.perf-ledger-close-val{
-    color:var(--white);
-    font-variant-numeric:tabular-nums;
-    letter-spacing:0.06em;
-}
-.perf-ledger-close-sep{
-    color:var(--border3);
-    opacity:0.5;
-    font-weight:400;
-}
-.perf-ledger-close-stamp{
-    margin-top:9px;
-    display:inline-flex;
-    align-items:center;
-    gap:6px;
-    padding:5px 11px;
-    border-radius:3px;
-    background:rgba(52,211,153,0.08);
-    border:1px solid rgba(52,211,153,0.25);
-    font-size:0.46rem;
-    font-weight:800;
-    letter-spacing:0.16em;
-    color:var(--green);
-    text-transform:uppercase;
-}
-.perf-ledger-close-tick{
-    font-size:0.6rem;
-    line-height:1;
-    text-shadow:0 0 5px rgba(52,211,153,0.55);
-}
-.perf-ledger-close-stamp-lbl{
-    font-variant-numeric:tabular-nums;
-}
-
-/* ── MOBILE — scale section headers and ledger close for phone widths ── */
-@media (max-width:520px){
-    .perf-hero{margin:14px 12px 0; padding:12px 14px 4px;}
-    .perf-hero-eyebrow-lbl{font-size:0.62rem; letter-spacing:0.14em;}
-    .perf-hero-eyebrow-sub{display:none;}
-    .perf-section{
-        margin:24px 12px 10px;
-        gap:11px;
-        padding:11px 0 9px;
-    }
-    .perf-section-num{font-size:1.35rem; min-width:30px;}
-    .perf-section-title{font-size:0.66rem; letter-spacing:0.12em;}
-    .perf-section-caption{font-size:0.46rem;}
-    .perf-ledger-close{margin:28px 12px 12px; padding:14px 8px 12px;}
-    .perf-ledger-close-row{font-size:0.5rem; gap:7px;}
-    .perf-ledger-close-stamp{font-size:0.42rem;}
 }
 
 /* ── MOBILE — stack the KPI blocks vertically on phone-width screens ── */
@@ -11515,143 +11994,103 @@ def main():
             st.info("No tips available yet.")
 
     with tab2:
-        # ── PERFORMANCE — the receipts, the rhythm, the receipts again ──
-        # Restructured as a proper editorial document, not a list of widgets:
+        # ── PERFORMANCE ──
+        # Deliberately stripped back from earlier versions. Earlier attempts
+        # added more chrome (bordered hero card, numbered chapter headers,
+        # accent-colour progression, closing ledger row) which felt premium
+        # in the abstract but read as decorative in practice. Real premium
+        # = the data is the hero, the framing disappears.
         #
-        #   • PREMIUM BANNER — pulses live, real strike rate baked in
-        #   • HERO MODULE — KPI strip wrapped in its own frame with
-        #     "HEADLINE METRICS" eyebrow, distinguishing it from sections
-        #   • FOUR SECTIONS — numbered, captioned, progressing through
-        #     accent colours (blue → cyan → purple → green) so the page
-        #     reads as a journey rather than a flat dump
-        #   • CLOSING LEDGER LINE — single balance-sheet summary that
-        #     ties everything together, like the bottom of a quarterly
+        # Strike Rate is NOT shown again here — it already appears in:
+        #   • the home-page hero ticker (huge animated number)
+        #   • the persistent terminal status bar at viewport bottom
+        # Showing it a third time within 200vh would be cluttered. Here
+        # we show the OTHER signals: where we sit vs industry, margin
+        # precision, calibration, and the granular round-by-round receipts.
         if tracker:
-            # Compute the headline metric inline so the banner shows real
-            # numbers, not just "VERIFIED" decoration. Bloomberg-style: the
-            # data IS the badge.
-            _all_games = [g for r in tracker for g in r["games"]]
-            _n_total = len(_all_games)
-            _n_correct = sum(1 for g in _all_games if g["correct"])
-            _sr = (_n_correct / _n_total * 100) if _n_total else 0
-            _margin_games = [g for g in _all_games if g.get("margin_error") is not None]
-            _mae = (sum(g["margin_error"] for g in _margin_games) / len(_margin_games)) if _margin_games else None
-
             st.markdown('<div class="perf-scope">', unsafe_allow_html=True)
+
+            # Quiet header — just the section name, no duplicated stats
             st.markdown(_h(f"""
-            <div class="perf-feed perf-feed-premium">
+            <div class="perf-feed perf-feed-clean">
               <div class="perf-feed-l">
                 <span class="perf-feed-glyph">◆</span>
                 <span class="perf-feed-lbl">PERFORMANCE LEDGER</span>
-                <span class="perf-feed-sep">·</span>
-                <span class="perf-feed-stat">{_sr:.1f}% STRIKE RATE</span>
               </div>
               <div class="perf-feed-r">
-                <span class="perf-feed-meta">{_n_total} TIPS · {len(tracker)} ROUNDS · YTD</span>
+                <span class="perf-feed-meta">{len(tracker)} ROUNDS · YTD</span>
               </div>
             </div>
             """), unsafe_allow_html=True)
 
-            # ── HERO MODULE — frames the KPI strip as the headline asset ──
-            # Wraps render_performance_kpi_strip in its own bordered card
-            # with an eyebrow above and the accent rail running down the
-            # left edge. The right-side status line shows MODEL ONLINE with
-            # a pulsing dot and the real load timestamp — signals system
-            # state, not decoration. Pulled from `now_stamp` so each page
-            # load reflects when this snapshot of metrics was computed.
-            st.markdown(_h(f"""
-            <div class="perf-hero">
-              <div class="perf-hero-rail"></div>
-              <div class="perf-hero-eyebrow">
-                <span class="perf-hero-eyebrow-glyph">◆</span>
-                <span class="perf-hero-eyebrow-lbl">Headline Metrics</span>
-                <span class="perf-hero-status">
-                  <span class="perf-hero-status-dot"></span>
-                  <span class="perf-hero-status-lbl">MODEL ONLINE</span>
-                  <span class="perf-hero-status-sep">·</span>
-                  <span class="perf-hero-status-time">LAST RUN {now_stamp} AWST</span>
-                </span>
-              </div>
-            """), unsafe_allow_html=True)
-            render_performance_kpi_strip(tracker)
-            st.markdown('</div>', unsafe_allow_html=True)
+            # ── BENCHMARK QUADRANT ──
+            # The single most confidence-building element on this page: a
+            # 2D scatter showing where our model sits vs other industry
+            # tipping models. Top-right is elite (high strike + low MAE).
+            # Renders nothing if early-season — handled in the function.
+            render_model_quadrant(year, rnd, sources, tracker)
 
-            # ── EDITORIAL SECTION HELPER ──
-            # Each section gets a numbered, captioned header with a
-            # progressing accent colour. Tones: 01 blue (analysis), 02
-            # cyan (trend), 03 purple (calibration), 04 green (receipts).
-            # The caption sells the section in one line — answers "what
-            # am I looking at?" before the user has to scan the widget.
-            def _perf_section(num, title, caption, tone):
+            # Quiet divider helper — just a thin line + small label, no
+            # numbered chapters, no progressing colours, no captions.
+            # The data below speaks for itself.
+            def _perf_div(lbl):
                 st.markdown(_h(f"""
-                <div class="perf-section" data-tone="{tone}">
-                  <div class="perf-section-num">{num}</div>
-                  <div class="perf-section-meta">
-                    <div class="perf-section-title">{title}</div>
-                    <div class="perf-section-caption">{caption}</div>
-                  </div>
-                  <div class="perf-section-rule"></div>
-                </div>
+                <div class="perf-div"><span class="perf-div-lbl">{lbl}</span></div>
                 """), unsafe_allow_html=True)
 
-            # ── 01 · MARKET POSITIONING & TIMING ──
-            _perf_section(
-                "01", "Market Positioning &amp; Timing",
-                "Where the model finds its edge — favourite vs underdog splits, and form by weekday.",
-                "blue",
-            )
-            render_split_analytics(tracker)
+            # MAE + CALIBRATION CARDS — compact 2-up showing what the
+            # status bar/hero ticker doesn't: margin precision and edge.
+            # Built fresh as a tight pair rather than rendering the old
+            # 3-block KPI strip (which led with Strike Rate, duplicating
+            # the headline elsewhere on the page).
+            _all_games = [g for r in tracker for g in r["games"]]
+            _margin_games = [g for g in _all_games if g.get("margin_error") is not None]
+            _mae = (sum(g["margin_error"] for g in _margin_games) / len(_margin_games)) if _margin_games else None
+            _hc_games = [g for g in _all_games if (g.get("confidence") or 0) >= 70]
+            _hc_rate = (sum(1 for g in _hc_games if g["correct"]) / len(_hc_games) * 100) if _hc_games else None
+            _season_rate = (sum(1 for g in _all_games if g["correct"]) / len(_all_games) * 100) if _all_games else 0
+            _edge = (_hc_rate - _season_rate) if _hc_rate is not None else None
 
-            # ── 02 · SEASON RHYTHM ──
-            _perf_section(
-                "02", "Season Rhythm",
-                "Form arc across the season — hot streaks, cold patches, and the trajectory.",
-                "cyan",
-            )
-            render_rhythm(tracker)
+            _mae_html = f"{_mae:.1f}<span class='perf-stat-unit'>pts</span>" if _mae is not None else "—"
+            if _edge is not None and len(_hc_games) >= 12:
+                _sign = "+" if _edge >= 0 else "−"
+                _edge_html = f"{_sign}{abs(_edge):.1f}<span class='perf-stat-unit'>pp</span>"
+                _edge_sub = f"high-conf rate {_hc_rate:.1f}% on {len(_hc_games)} tips"
+            elif _hc_rate is not None:
+                _edge_html = f"{_hc_rate:.1f}<span class='perf-stat-unit'>%</span>"
+                _edge_sub = f"small sample · {len(_hc_games)} high-conf tips"
+            else:
+                _edge_html = "—"
+                _edge_sub = "awaiting high-confidence sample"
 
-            # ── 03 · CONFIDENCE LADDER ──
-            _perf_section(
-                "03", "Confidence Ladder",
-                "Calibration proof — when we said we were sure, here's how often we delivered.",
-                "purple",
-            )
-            render_trust_brackets(tracker)
-
-            # ── 04 · ROUND LEDGER ──
-            _perf_section(
-                "04", "Round Ledger",
-                "The granular record — every tip, every round, with margin precision.",
-                "green",
-            )
-            render_scorecard(tracker)
-            render_margin_scorecard(tracker)
-
-            # ── CLOSING BALANCE-SHEET LINE ──
-            # Bookends the tab with a one-line summary, the way a real
-            # financial report ends with a bottom-line totals row. Wraps
-            # the four headline numbers (correct/total/strike/MAE) plus
-            # a "verified" stamp and a timestamp. Reads as the period's
-            # accounting close.
-            _mae_str = f"{_mae:.1f}pts MAE" if _mae is not None else "MAE pending"
             st.markdown(_h(f"""
-            <div class="perf-ledger-close">
-              <div class="perf-ledger-close-rule"></div>
-              <div class="perf-ledger-close-row">
-                <span class="perf-ledger-close-lbl">YEAR TO DATE</span>
-                <span class="perf-ledger-close-sep">·</span>
-                <span class="perf-ledger-close-val">{_n_correct} OF {_n_total} CORRECT</span>
-                <span class="perf-ledger-close-sep">·</span>
-                <span class="perf-ledger-close-val">{_sr:.1f}% STRIKE</span>
-                <span class="perf-ledger-close-sep">·</span>
-                <span class="perf-ledger-close-val">{_mae_str}</span>
+            <div class="perf-stat-pair">
+              <div class="perf-stat-card">
+                <div class="perf-stat-lbl">Margin Precision</div>
+                <div class="perf-stat-val">{_mae_html}</div>
+                <div class="perf-stat-sub">mean absolute error · {len(_margin_games)} tips</div>
               </div>
-              <div class="perf-ledger-close-stamp">
-                <span class="perf-ledger-close-tick">✓</span>
-                <span class="perf-ledger-close-stamp-lbl">VERIFIED · {len(tracker)} ROUNDS RECORDED</span>
+              <div class="perf-stat-card">
+                <div class="perf-stat-lbl">Confidence Edge</div>
+                <div class="perf-stat-val">{_edge_html}</div>
+                <div class="perf-stat-sub">{_edge_sub}</div>
               </div>
             </div>
             """), unsafe_allow_html=True)
+
+            # ── SECTIONS — quiet dividers, data does the talking ──
+            _perf_div("Favourite vs Underdog · Day of Week")
+            render_split_analytics(tracker)
+
+            _perf_div("Season Rhythm")
+            render_rhythm(tracker)
+
+            _perf_div("Confidence Ladder")
+            render_trust_brackets(tracker)
+
+            _perf_div("Round-by-Round Ledger")
+            render_scorecard(tracker)
+            render_margin_scorecard(tracker)
 
             st.markdown('</div>', unsafe_allow_html=True)
         else:

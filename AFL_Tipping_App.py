@@ -453,6 +453,31 @@ def fetch_team_selections():
     out = {}
     unmapped_slugs = set()
     for m in matches:
+        # ── Recover from one-panel-only matches ──
+        # If only ONE side panel was successfully parsed, try to infer the
+        # missing team from the match header text ("Team A v Team B (Venue)").
+        # This makes the parser robust to cases where Footywire renders one
+        # team's panel in a structure we don't recognise — rather than
+        # dropping the entire match silently, we render what we have and
+        # mark the other team as "no parsed changes" (same XI fallback).
+        if (m.get("home") and not m.get("away")) or (m.get("away") and not m.get("home")):
+            header = m.get("match") or ""
+            inferred = _fw_infer_missing_team_from_header(
+                header,
+                known_slug=(m["home"]["team_slug"] if m.get("home") else m["away"]["team_slug"]),
+            )
+            if inferred is not None:
+                # We figured out the other team — fill an empty panel for them
+                stub_panel = {
+                    "team_slug": inferred,
+                    "ins":  [],
+                    "outs": [],
+                }
+                if m.get("home"):
+                    m["away"] = stub_panel
+                else:
+                    m["home"] = stub_panel
+
         if not m.get("home") or not m.get("away"):
             continue
         h_slug = m["home"]["team_slug"]
@@ -606,6 +631,59 @@ def _fw_is_side_panel(table):
             if label in _FW_SECTION_LABELS:
                 headings.add(label)
     return "Interchange" in headings and len(headings) >= 2
+
+
+def _fw_infer_missing_team_from_header(header_text, known_slug):
+    """Recover a missing team's slug from the match header.
+
+    The match header reads 'Team A v Team B (Venue)'. If only one side
+    panel parsed successfully, we know one team's slug; we extract the
+    other team's name from the header text and convert it to a slug via
+    reverse-lookup of FW_TEAM_SLUG_TO_NAME.
+
+    Returns the inferred slug, or None if we can't confidently identify
+    the other team (avoiding incorrect attribution is more important
+    than always returning something)."""
+    if not header_text or " v " not in header_text:
+        return None
+    # Strip the venue/time parenthetical to leave just "Team A v Team B"
+    teams_text = header_text.split("(", 1)[0].strip()
+    parts = teams_text.split(" v ")
+    if len(parts) != 2:
+        return None
+    name_a, name_b = parts[0].strip(), parts[1].strip()
+    # Map the canonical app name of `known_slug` so we can identify which
+    # of name_a/name_b it corresponds to
+    known_canonical = FW_TEAM_SLUG_TO_NAME.get(known_slug)
+    if known_canonical is None:
+        return None
+    # The "other" team is whichever of name_a/name_b does NOT canonical-
+    # match the known team's name. Use canonical() to handle alias forms
+    # like "North Melbourne Kangaroos" → "North Melbourne".
+    cand_a_canon = canonical(name_a)
+    cand_b_canon = canonical(name_b)
+    if cand_a_canon == known_canonical:
+        other_name = name_b
+    elif cand_b_canon == known_canonical:
+        other_name = name_a
+    else:
+        # Neither header team matched the known panel — abort rather than guess
+        return None
+    # Convert the other team's name → slug by inverting FW_TEAM_SLUG_TO_NAME.
+    # Multiple slugs map to the same canonical (e.g. 'adelaide' and
+    # 'adelaide-crows' → 'Adelaide'); we want a slug that round-trips
+    # correctly through the existing map, so pick the canonical name's
+    # exact slug form first if present, else any slug that maps back.
+    other_canonical = canonical(other_name)
+    # Try direct canonical-name slugification first (lowercase + hyphens)
+    canonical_slug = other_canonical.lower().replace(" ", "-")
+    if FW_TEAM_SLUG_TO_NAME.get(canonical_slug) == other_canonical:
+        return canonical_slug
+    # Fallback: scan the map for any slug that resolves to this canonical
+    for slug, name in FW_TEAM_SLUG_TO_NAME.items():
+        if name == other_canonical:
+            return slug
+    return None
 
 def _fw_parse_side_panel(panel):
     current_section = None
@@ -3029,10 +3107,21 @@ def render_model_quadrant(year, current_round, sources, tracker):
 
     Renders nothing if there's insufficient data (early-season, before
     enough completed games to make the picture meaningful)."""
-    # Pull completed games for this season + all tips
-    season_games = filter_before(get_all_games(year), current_round) if current_round > 0 else \
-                   filter_completed(get_all_games(year - 1))
-    season_tips = get_all_tips(year) if current_round > 0 else get_all_tips(year - 1)
+    # Pull ALL completed games this season — including any from the current
+    # round that have already finished. This matches Squiggle's leaderboard
+    # methodology (season-to-date). The previous filter_before() call
+    # silently dropped completed games from the current round, so per-model
+    # strike rates landed slightly below Squiggle's published numbers.
+    if current_round > 0:
+        season_games = filter_completed(get_all_games(year))
+        season_tips = get_all_tips(year)
+        # Fall back to last year if the season hasn't started yet
+        if not season_games:
+            season_games = filter_completed(get_all_games(year - 1))
+            season_tips = get_all_tips(year - 1)
+    else:
+        season_games = filter_completed(get_all_games(year - 1))
+        season_tips = get_all_tips(year - 1)
     if not season_games or not season_tips:
         return
 
@@ -3241,10 +3330,21 @@ def render_model_quadrant(year, current_round, sources, tracker):
     parts.append('</svg>')
     svg = "\n".join(parts)
 
-    # Build a small legend below the chart with sample size context
+    # Build the legend below the chart.
+    # Includes explicit rank context — "rank N of M on strike" — so the chart
+    # can be sanity-checked against Squiggle's leaderboard at a glance. If the
+    # rank vs. total looks off (e.g. only 6 of 6 instead of 5 of 32), it
+    # immediately surfaces a data-filtering issue rather than burying it.
     our_strike_str = f"{our_pt['strike_rate']:.1f}%"
     our_mae_str = f"{our_pt['mae']:.1f}pts"
     industry_n = len(industry_pts)
+    total_n = industry_n + 1  # +1 for OURS
+    # Where does OURS rank among the full field?
+    strike_better = sum(1 for p in industry_pts if p["strike_rate"] > our_pt["strike_rate"])
+    mae_better    = sum(1 for p in industry_pts if p["mae"]         < our_pt["mae"])
+    strike_rank = strike_better + 1
+    mae_rank    = mae_better + 1
+    our_sample = our_pt.get("sample_n", 0)
     legend_html = (
         f'<div class="perf-quad-legend">'
         f'  <div class="perf-quad-legend-row">'
@@ -3255,11 +3355,21 @@ def render_model_quadrant(year, current_round, sources, tracker):
         f'    <span class="perf-quad-legend-sep">·</span>'
         f'    <span class="perf-quad-legend-val">{our_mae_str} MAE</span>'
         f'  </div>'
+        f'  <div class="perf-quad-legend-row perf-quad-legend-rank">'
+        f'    <span class="perf-quad-legend-rank-lbl">RANK</span>'
+        f'    <span class="perf-quad-legend-rank-val">#{strike_rank} of {total_n}</span>'
+        f'    <span class="perf-quad-legend-rank-sub">on strike</span>'
+        f'    <span class="perf-quad-legend-sep">·</span>'
+        f'    <span class="perf-quad-legend-rank-val">#{mae_rank} of {total_n}</span>'
+        f'    <span class="perf-quad-legend-rank-sub">on margin</span>'
+        f'  </div>'
         f'  <div class="perf-quad-legend-row perf-quad-legend-row-quiet">'
         f'    <span class="perf-quad-legend-dot perf-quad-legend-dot-other"></span>'
         f'    <span class="perf-quad-legend-lbl">OTHER INDUSTRY TIPPING MODELS</span>'
         f'    <span class="perf-quad-legend-sep">·</span>'
         f'    <span class="perf-quad-legend-val">{industry_n} BENCHMARKED</span>'
+        f'    <span class="perf-quad-legend-sep">·</span>'
+        f'    <span class="perf-quad-legend-val">{our_sample} TIPS · YTD</span>'
         f'  </div>'
         f'</div>'
     )
@@ -10165,6 +10275,34 @@ st.markdown("""
 .perf-quad-legend-row-quiet{
     opacity:0.7;
 }
+.perf-quad-legend-rank{
+    /* Slightly nudged in from the main rows to read as a sub-row.
+       This is the rank punchline — "you are #N of M" — so colour-pop
+       it with the green accent without going over-the-top. */
+    padding-left:14px;
+    gap:6px;
+}
+.perf-quad-legend-rank-lbl{
+    font-size:0.42rem;
+    font-weight:700;
+    letter-spacing:0.18em;
+    color:var(--text3);
+    text-transform:uppercase;
+}
+.perf-quad-legend-rank-val{
+    color:#22d39e;
+    font-weight:800;
+    font-variant-numeric:tabular-nums;
+    letter-spacing:0.04em;
+    text-shadow:0 0 4px rgba(52,211,153,0.35);
+}
+.perf-quad-legend-rank-sub{
+    color:var(--text3);
+    font-weight:600;
+    font-size:0.44rem;
+    letter-spacing:0.08em;
+    text-transform:lowercase;
+}
 .perf-quad-legend-dot{
     width:9px; height:9px;
     border-radius:50%;
@@ -12213,6 +12351,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-

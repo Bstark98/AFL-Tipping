@@ -4348,8 +4348,8 @@ def render_team_selections_inline(team_name, opponent_name, selections_data, tea
 
     `match_dt` is the match's Perth-zoned datetime — used in the pending
     state to display when team lists are expected to be released:
-      • Thursday matches  → Wed 12pm release (the night-before drop)
-      • All other matches → Thu 12pm release (the standard round drop)
+      • Thursday matches  → Wed 6:30pm release (the night-before drop)
+      • All other matches → Thu 6:30pm release (the standard round drop)
 
     Returns empty string when there are no changes or no data record yet,
     so the team header stays clean for unnamed/unchanged teams."""
@@ -4358,16 +4358,16 @@ def render_team_selections_inline(team_name, opponent_name, selections_data, tea
     if record is None:
         # Teams not named yet — show a small amber pending hint with the
         # expected release time so the punter knows when to come back.
-        # AFL convention: Thursday match team lists drop Wed 12pm AEST/AEDT,
-        # all other rounds' lists drop Thu 12pm.
+        # AFL convention: Thursday match team lists drop Wed 6:30pm AEST/AEDT,
+        # all other rounds' lists drop Thu 6:30pm.
         release_msg = "Team list not yet named"
         if match_dt is not None:
             try:
                 # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
                 if match_dt.weekday() == 3:  # Thursday match
-                    release_msg = "Lists released Wed 12pm"
+                    release_msg = "Lists released Wed 6:30pm"
                 else:
-                    release_msg = "Lists released Thu 12pm"
+                    release_msg = "Lists released Thu 6:30pm"
             except Exception:
                 pass
         return _h(f"""

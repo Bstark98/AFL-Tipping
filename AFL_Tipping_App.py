@@ -1201,7 +1201,7 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 }
 .mc-mt-sel-row-unknown .mc-mt-sel-pct{display:none;}
 
-/* "Same XI as last week" empty-state */
+/* "No Changes Made" empty-state */
 .mc-mt-sel-empty{
   font-size:0.46rem; color:var(--text3);
   letter-spacing:0.04em;
@@ -4388,7 +4388,7 @@ def render_team_selections_inline(team_name, opponent_name, selections_data, tea
         # No changes for this team — quiet single-line note
         return _h(f"""
         <div class="mc-mt-sel mc-mt-sel-empty">
-          Same XI as last week
+          No Changes Made
         </div>
         """)
 

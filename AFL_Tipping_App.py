@@ -927,6 +927,46 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .hts-num{font-family:var(--mono);font-size:1.2rem;font-weight:800;letter-spacing:-0.035em;line-height:1;color:var(--white);}
 .hts-num .pct{font-size:0.7rem;color:var(--text2);font-weight:600;}
 .hts-lbl{font-family:var(--mono);font-size:0.48rem;color:var(--text2);letter-spacing:0.1em;text-transform:uppercase;margin-top:3px;}
+/* ── Status qualifier per cell ──
+   Tiny third-line indicator: coloured pip + one-word qualifier
+   ("ELITE FORM", "STRONG", "TOP TIER", "COOLING", etc). This is the
+   Bloomberg principle in action: every cell answers "what does this
+   mean?" not just "what is it?" — without competing visually with
+   the big number above. */
+.hts-qual{
+    margin-top:5px;
+    font-family:var(--mono);
+    font-size:0.42rem;
+    font-weight:700;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    display:flex; align-items:center; gap:4px;
+    line-height:1;
+}
+.hts-pip{
+    width:5px; height:5px;
+    border-radius:50%;
+    flex-shrink:0;
+}
+.hts-qual-g{color:rgba(52,211,153,0.85);}
+.hts-qual-g .hts-pip{
+    background:var(--green);
+    box-shadow:0 0 4px rgba(52,211,153,0.55);
+}
+.hts-qual-a{color:rgba(245,158,11,0.85);}
+.hts-qual-a .hts-pip{
+    background:var(--accent);
+    box-shadow:0 0 4px rgba(245,158,11,0.55);
+}
+.hts-qual-r{color:rgba(239,68,68,0.85);}
+.hts-qual-r .hts-pip{
+    background:var(--red);
+    box-shadow:0 0 4px rgba(239,68,68,0.55);
+}
+.hts-qual-n{color:rgba(160,170,185,0.65);}
+.hts-qual-n .hts-pip{
+    background:rgba(160,170,185,0.45);
+}
 
 /* ROUND PULSE PANEL */
 .pulse{margin:22px 14px 0;background:var(--card);border:1px solid var(--border2);border-radius:10px;overflow:hidden;font-family:var(--mono);position:relative;animation:fadeUp 0.5s ease 0.1s both;}
@@ -2296,13 +2336,13 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 }
 .mc-h2h-w-row{
   display:grid;
-  /* First column tracks the headshot diameter (40px). The rank column
-     stays small (24px) — the digit fits comfortably and a wider column
-     would visually compete with the name. Gap bumped from 6→8px so the
-     bigger headshot has slightly more breathing room from the rank. */
-  grid-template-columns:40px 24px 1fr auto;
+  /* Two columns: headshot + text block. The text block is a flex container
+     that lays out the name and avg horizontally on desktop, vertically
+     (stacked) on phone. This unified structure replaces the previous
+     4-column grid which couldn't survive phone-width truncation. */
+  grid-template-columns:40px 1fr;
   align-items:center;
-  gap:8px;
+  gap:10px;
   padding:4px 0;
   min-height:42px;
   /* Touch interaction prep: cursor + transition for the :active state
@@ -2318,6 +2358,40 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   /* Make the whole row hit-friendly on phone — using a transparent bg
      gives :active state somewhere visible to land. */
   background:transparent;
+}
+/* Text block inside the row — holds rank+name and avg.
+   On desktop: horizontal flex (name fills available width, avg pinned right).
+   On phone: vertical stack via the mobile breakpoint below. */
+.mc-h2h-w-text{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
+/* The rank prefix shown inline before the name. Stays in team accent
+   colour at normal rank, gets the medal-tier colour for league top-3
+   (rules below). Tabular-num so #5 and #15 align cleanly when stacked. */
+.mc-h2h-w-rank-inline{
+  color:var(--team-accent);
+  opacity:0.72;
+  font-weight:700;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:-0.01em;
+  margin-right:4px;
+  font-size:0.88em;
+}
+.mc-h2h-w-row[data-rank="1"] .mc-h2h-w-rank-inline{
+  color:#fbbf24;
+  text-shadow:0 0 4px rgba(251,191,36,0.5);
+  opacity:1;
+}
+.mc-h2h-w-row[data-rank="2"] .mc-h2h-w-rank-inline{
+  color:#d4dae0;
+  opacity:0.95;
+}
+.mc-h2h-w-row[data-rank="3"] .mc-h2h-w-rank-inline{
+  color:#d49060;
+  opacity:0.95;
 }
 
 /* ── HEADSHOT CIRCLE ──
@@ -2596,23 +2670,30 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 .mc-h2h-w-name{
   font-size:0.6rem; font-weight:600;
   color:var(--white);
-  line-height:1.1;
+  line-height:1.15;
   letter-spacing:0.01em;
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
   font-family:var(--mono);
+  /* Take up available horizontal space inside the flex text block — pushes
+     the avg to the right edge on desktop. On mobile the parent flex flips
+     direction (column) and this flex:1 has no effect since vertical space
+     is governed by content. */
+  flex:1 1 auto;
+  min-width:0;
 }
 .mc-h2h-w-avg{
-  font-size:0.62rem; font-weight:800;
+  font-size:0.66rem; font-weight:800;
   font-variant-numeric:tabular-nums;
   color:var(--white);
   line-height:1;
   letter-spacing:-0.01em;
-  padding:1px 5px;
+  padding:2px 6px;
   border-radius:3px;
   background:color-mix(in srgb, var(--team-accent) 10%, transparent);
   border:1px solid color-mix(in srgb, var(--team-accent) 22%, transparent);
+  flex-shrink:0;
 }
 .mc-h2h-w-empty{
   font-size:0.46rem; font-weight:500;
@@ -2699,59 +2780,58 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   .mc-h2h-w-vs-glyph{font-size:0.42rem; letter-spacing:0.14em;}
   .mc-h2h-w-vs-level-lbl{font-size:0.4rem; padding:2px 5px; letter-spacing:0.14em;}
   .mc-h2h-w-row{
-    /* Collapse the rank column to zero — it gets re-rendered as a ::before
-       on the name span instead, freeing ~27px of horizontal space. Without
-       this, names like "Neale" and "Ashcroft" truncate to single letters
-       on phone-width because the fixed columns eat the row's full width.
-       Gaps shrunk from 7→5px to recover another few pixels. */
-    grid-template-columns:32px 0 1fr auto;
-    gap:5px;
-    min-height:38px;
-    padding:3px 0;
+    /* Bigger headshot column on phone (40px) since we now have vertical
+       room — the text block stacks name above avg, so the row is taller
+       overall and the headshot can be the substantial centrepiece it
+       should be. */
+    grid-template-columns:40px 1fr;
+    gap:9px;
+    min-height:48px;
+    padding:5px 0;
   }
-  /* Hide the standalone rank cell — it's still in the DOM (kept for
-     desktop) but visually replaced by the inline prefix on phone. */
-  .mc-h2h-w-rank{display:none;}
-  /* Inline rank prefix on the name span. The --row-rank custom property
-     is set on each row via inline style with the value '#5', '#15' etc.
-     Uses content: attr() syntax via var() because pseudo-element content
-     can read CSS custom properties since 2023+. Falls back gracefully on
-     older browsers (just shows the surname without the rank, which is
-     still readable). */
-  .mc-h2h-w-name::before{
-    content:var(--row-rank, '');
-    color:var(--team-accent);
-    opacity:0.7;
+  /* Stack text vertically on phone: name on top (smaller, dim), then
+     avg below (bigger, bolder — the punchline). This is the core fix
+     for the long-running name-truncation issue: by removing horizontal
+     competition between name and avg entirely, surnames have all the
+     row's available width and the avg becomes the visual hero of each
+     row without fighting for space. */
+  .mc-h2h-w-text{
+    flex-direction:column;
+    align-items:flex-start;
+    gap:1px;
+    min-width:0;
+    width:100%;
+  }
+  .mc-h2h-w-name{
+    font-size:0.58rem;
     font-weight:600;
-    margin-right:5px;
-    font-variant-numeric:tabular-nums;
-    letter-spacing:-0.01em;
-    /* Slight size reduction vs the surname so the rank reads as
-       secondary info — the name remains the primary identifier. */
-    font-size:0.92em;
+    line-height:1.15;
+    /* Allow ellipsis if a name STILL doesn't fit (long compound names),
+       but with the full row width now available it should be rare. */
+    max-width:100%;
   }
-  /* Medal-tier rank colours still apply on phone — keep the rank prefix
-     glowing gold/silver/bronze when the player is league top-3. */
-  .mc-h2h-w-row[data-rank="1"] .mc-h2h-w-name::before{
-    color:#fbbf24;
-    text-shadow:0 0 4px rgba(251,191,36,0.5);
-    opacity:1;
+  .mc-h2h-w-avg{
+    /* Avg becomes the row's punchline number on phone — bigger, no
+       background pill (cleaner without the border now that it's the
+       primary visual element on its line). The team-accent shows in
+       text colour instead. */
+    font-size:0.82rem;
+    font-weight:800;
+    padding:0;
+    background:transparent;
+    border:none;
+    color:var(--white);
+    letter-spacing:-0.02em;
+    line-height:1;
   }
-  .mc-h2h-w-row[data-rank="2"] .mc-h2h-w-name::before{
-    color:#d4dae0;
-    opacity:0.95;
+  .mc-h2h-w-rank-inline{
+    /* Slightly smaller on phone since the avg below already establishes
+       the row's visual weight. */
+    font-size:0.85em;
   }
-  .mc-h2h-w-row[data-rank="3"] .mc-h2h-w-name::before{
-    color:#d49060;
-    opacity:0.95;
-  }
-  .mc-h2h-w-name{font-size:0.6rem;}
-  .mc-h2h-w-avg{font-size:0.58rem; padding:1px 4px;}
-  /* Headshot shrunk slightly more (36 → 32) to give the name column
-     just a little extra breathing room — three players per side, and
-     longer surnames like "Ashcroft" or "De Koning" need every pixel. */
-  .mc-h2h-w-shot{width:32px; height:32px;}
-  .mc-h2h-w-shot-initials{font-size:0.58rem;}
+  /* Headshot stays substantial on phone — taller row means we have room */
+  .mc-h2h-w-shot{width:40px; height:40px;}
+  .mc-h2h-w-shot-initials{font-size:0.7rem;}
   .mc-h2h-w-empty-line{font-size:0.5rem;}
 }
 
@@ -2798,8 +2878,11 @@ def fetch(p):
 def get_sources():
     return {s["id"]: s["name"] for s in fetch("q=sources").get("sources", [])}
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def get_current_round(year):
+    # 2min TTL — round status can change mid-evening as the last game of
+    # a round finishes. Previously 5min meant the "current round" label
+    # could lag by up to 5 minutes after a round actually completed.
     data = fetch(f"q=games;year={year};complete=!100")
     games = data.get("games", [])
     if games:
@@ -2810,19 +2893,24 @@ def get_current_round(year):
         raise ValueError(f"No games for {year}.")
     return games[0]["year"], max(g["round"] for g in games)
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def get_games(year, rnd):
     return fetch(f"q=games;year={year};round={rnd}").get("games", [])
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def get_tips(year, rnd):
     return fetch(f"q=tips;year={year};round={rnd}").get("tips", [])
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def get_all_games(year):
+    # 2min TTL — the most critical cache for live updates. Every game
+    # result that lands in Squiggle's database becomes visible to our
+    # tracker after at most 2 minutes (vs previous 10). Refreshing the
+    # page during a Saturday evening will surface results almost as
+    # they happen.
     return fetch(f"q=games;year={year}").get("games", [])
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def get_all_tips(year):
     tips = []
     for r in range(0, 30):
@@ -3254,23 +3342,78 @@ def render_model_quadrant(year, current_round, sources, tracker):
         f'      x1="{PAD_L}" y1="{elite_y:.1f}" '
         f'      x2="{W-PAD_R}" y2="{elite_y:.1f}"/>'
     )
-    # ELITE label in top-right quadrant corner
+    # ── Quadrant labels ──
+    # Each corner of the plot gets a label describing what that quadrant
+    # MEANS in terms of trade-offs. ELITE (top-right, high strike + low
+    # MAE) is the goal and stays in the green palette. The other three
+    # describe the trade-off honestly:
+    #   • TIGHT MARGINS (top-left)    — accurate margins, weak winners
+    #   • STRONG PICKS  (bottom-right)— picks winners, loose margins
+    #   • TRAILING      (bottom-left) — behind both medians
+    # The non-ELITE labels are quiet grey so they read as available context
+    # without competing visually with the ELITE callout.
     parts.append(
-        f'<text class="perf-quad-elite-lbl" '
+        f'<text class="perf-quad-q-lbl perf-quad-q-elite" '
         f'      x="{W-PAD_R-6:.1f}" y="{PAD_T+12}" '
         f'      text-anchor="end">ELITE</text>'
     )
+    parts.append(
+        f'<text class="perf-quad-q-lbl perf-quad-q-other" '
+        f'      x="{PAD_L+6:.1f}" y="{PAD_T+12}" '
+        f'      text-anchor="start">TIGHT MARGINS</text>'
+    )
+    parts.append(
+        f'<text class="perf-quad-q-lbl perf-quad-q-other" '
+        f'      x="{W-PAD_R-6:.1f}" y="{H-PAD_B-6:.1f}" '
+        f'      text-anchor="end">STRONG PICKS</text>'
+    )
+    parts.append(
+        f'<text class="perf-quad-q-lbl perf-quad-q-other" '
+        f'      x="{PAD_L+6:.1f}" y="{H-PAD_B-6:.1f}" '
+        f'      text-anchor="start">TRAILING</text>'
+    )
 
-    # Industry points — quiet grey
-    for p in industry_pts:
+    # ── Industry points — quiet grey, fading in with staggered delay ──
+    # The staggered fade-in is the "live data populating" effect — gives
+    # the chart a sense of activity even though the data is static once
+    # rendered. CSS uses the --i custom property to compute each dot's
+    # animation-delay, so dot 0 appears first and dot 30 last.
+    for i, p in enumerate(industry_pts):
         cx, cy = _x(p["strike_rate"]), _y(p["mae"])
         parts.append(
             f'<circle class="perf-quad-other" '
-            f'        cx="{cx:.1f}" cy="{cy:.1f}" r="3.4"/>'
+            f'        cx="{cx:.1f}" cy="{cy:.1f}" r="3.4" '
+            f'        style="--i:{i};"/>'
         )
 
-    # Our point — large, ringed, glowing. Draw the outer halo first.
+    # Our point — large, ringed, glowing.
     our_x, our_y = _x(our_pt["strike_rate"]), _y(our_pt["mae"])
+    # ── Coordinate readout lines from OURS to both axes ──
+    # Thin dashed lines that drop from OURS to the X axis and across to
+    # the Y axis, so the punter can read off exact coordinates without
+    # squinting. Draws BEFORE the dot itself so the dot sits on top.
+    parts.append(
+        f'<line class="perf-quad-ours-coord" '
+        f'      x1="{our_x:.1f}" y1="{our_y:.1f}" '
+        f'      x2="{our_x:.1f}" y2="{H-PAD_B:.1f}"/>'
+    )
+    parts.append(
+        f'<line class="perf-quad-ours-coord" '
+        f'      x1="{our_x:.1f}" y1="{our_y:.1f}" '
+        f'      x2="{PAD_L:.1f}" y2="{our_y:.1f}"/>'
+    )
+    # Small ticks at the axis terminations of the connector lines so the
+    # eye reads them as deliberate readouts rather than noise.
+    parts.append(
+        f'<circle class="perf-quad-ours-coord-tick" '
+        f'        cx="{our_x:.1f}" cy="{H-PAD_B:.1f}" r="2"/>'
+    )
+    parts.append(
+        f'<circle class="perf-quad-ours-coord-tick" '
+        f'        cx="{PAD_L:.1f}" cy="{our_y:.1f}" r="2"/>'
+    )
+
+    # Now draw the OURS dot stack — halo, ring, core (back-to-front)
     parts.append(
         f'<circle class="perf-quad-ours-halo" '
         f'        cx="{our_x:.1f}" cy="{our_y:.1f}" r="14"/>'
@@ -3345,6 +3488,57 @@ def render_model_quadrant(year, current_round, sources, tracker):
     strike_rank = strike_better + 1
     mae_rank    = mae_better + 1
     our_sample = our_pt.get("sample_n", 0)
+
+    # ── Gap to leader ──
+    # The single most compelling confidence-building stat: how close to
+    # the top of the field is the model? "3 tips behind leader" reads
+    # very differently from "20 tips behind leader" even though both
+    # are top-half results.
+    #
+    # Strike gap: we report the count-equivalent gap (more visceral) and
+    # the rate gap (more precise). To compute count-equivalent fairly when
+    # sample sizes differ between models: imagine OUR sample size at the
+    # leader's rate, and compute how many more correct tips that would be.
+    leader_strike = max((p["strike_rate"] for p in industry_pts), default=None)
+    leader_mae    = min((p["mae"]         for p in industry_pts), default=None)
+
+    if strike_rank == 1:
+        strike_gap_html = (
+            '<span class="perf-quad-legend-gap-lbl">STRIKE</span>'
+            '<span class="perf-quad-legend-gap-leading">◆ LEADING THE FIELD</span>'
+        )
+    elif leader_strike is not None and our_sample > 0:
+        rate_gap_pp = leader_strike - our_pt["strike_rate"]
+        # Count-equivalent: at leader's rate over our sample, leader
+        # would have round(sample × leader_rate / 100) correct.
+        leader_eq_count = round(our_sample * leader_strike / 100.0)
+        our_count = round(our_sample * our_pt["strike_rate"] / 100.0)
+        tip_gap = max(0, leader_eq_count - our_count)
+        # "1 TIP BEHIND" vs "3 TIPS BEHIND" — pluralise honestly
+        tip_word = "TIP" if tip_gap == 1 else "TIPS"
+        strike_gap_html = (
+            f'<span class="perf-quad-legend-gap-lbl">STRIKE GAP</span>'
+            f'<span class="perf-quad-legend-gap-val">{tip_gap} {tip_word}</span>'
+            f'<span class="perf-quad-legend-gap-sub">behind leader · {rate_gap_pp:.1f}pp</span>'
+        )
+    else:
+        strike_gap_html = ''
+
+    if mae_rank == 1:
+        mae_gap_html = (
+            '<span class="perf-quad-legend-gap-lbl">MARGIN</span>'
+            '<span class="perf-quad-legend-gap-leading">◆ LEADING THE FIELD</span>'
+        )
+    elif leader_mae is not None:
+        mae_gap = our_pt["mae"] - leader_mae
+        mae_gap_html = (
+            f'<span class="perf-quad-legend-gap-lbl">MARGIN GAP</span>'
+            f'<span class="perf-quad-legend-gap-val">+{mae_gap:.1f}pts</span>'
+            f'<span class="perf-quad-legend-gap-sub">behind leader</span>'
+        )
+    else:
+        mae_gap_html = ''
+
     legend_html = (
         f'<div class="perf-quad-legend">'
         f'  <div class="perf-quad-legend-row">'
@@ -3363,6 +3557,12 @@ def render_model_quadrant(year, current_round, sources, tracker):
         f'    <span class="perf-quad-legend-rank-val">#{mae_rank} of {total_n}</span>'
         f'    <span class="perf-quad-legend-rank-sub">on margin</span>'
         f'  </div>'
+        f'  <div class="perf-quad-legend-row perf-quad-legend-gap">'
+        f'    {strike_gap_html}'
+        f'  </div>'
+        f'  <div class="perf-quad-legend-row perf-quad-legend-gap">'
+        f'    {mae_gap_html}'
+        f'  </div>'
         f'  <div class="perf-quad-legend-row perf-quad-legend-row-quiet">'
         f'    <span class="perf-quad-legend-dot perf-quad-legend-dot-other"></span>'
         f'    <span class="perf-quad-legend-lbl">OTHER INDUSTRY TIPPING MODELS</span>'
@@ -3376,10 +3576,14 @@ def render_model_quadrant(year, current_round, sources, tracker):
 
     st.markdown(_h(f"""
     <div class="perf-quad-wrap">
+      <div class="perf-quad-sweep"></div>
       <div class="perf-quad-eyebrow">
         <span class="perf-quad-eyebrow-glyph">◇</span>
         <span class="perf-quad-eyebrow-lbl">Benchmark Position</span>
-        <span class="perf-quad-eyebrow-sub">vs other industry tipping models · season to date</span>
+        <span class="perf-quad-eyebrow-live">
+          <span class="perf-quad-eyebrow-live-dot"></span>
+          <span class="perf-quad-eyebrow-live-lbl">TRACKING LIVE</span>
+        </span>
       </div>
       {svg}
       {legend_html}
@@ -5092,19 +5296,133 @@ def h2h_headshot_url(player_name, id_lookup):
     return _H2H_HEADSHOT_URL_TMPL.format(pid=pid)
 
 
+def _player_surname(name):
+    """Derive a 'surname-only' display form for narrow viewports.
+    Rules:
+      • Hyphenated surnames stay intact (Wanganeen-Milera, not
+        just Milera) — those compound names are how those players
+        are known and splitting them loses identity.
+      • Surnames with particles ('De', 'Van', 'Van der', 'Le',
+        'O'') keep the particle attached (Sam De Koning → 'De Koning',
+        not 'Koning').
+      • One-word names fall back to the whole name unchanged.
+      • Empty / malformed input falls back to the original string.
+    Examples:
+      Lachie Neale          → Neale
+      Tyson Stengle         → Stengle
+      Sam De Koning         → De Koning
+      Wanganeen-Milera      → Wanganeen-Milera (single token, kept whole)
+      Joel Jeffrey          → Jeffrey
+      Connor O'Sullivan     → O'Sullivan
+    """
+    parts = (name or "").strip().split()
+    if not parts:
+        return name
+    if len(parts) == 1:
+        return parts[0]
+    # If the second-to-last token is a known particle, glue it
+    # back onto the surname. The set is small but covers the most
+    # common AFL surname patterns. Lowercased for case-insensitive
+    # matching since some sources capitalise differently.
+    PARTICLES = {"de", "van", "der", "le", "la", "du", "von"}
+    if len(parts) >= 3 and parts[-2].lower() in PARTICLES:
+        # Handle "Van der X" → "Van der X" (three-token surname)
+        if len(parts) >= 4 and parts[-3].lower() in PARTICLES:
+            return " ".join(parts[-3:])
+        return " ".join(parts[-2:])
+    return parts[-1]
+
+
 def build_h2h_watchlist(canonical_name, player_rankings_by_stat):
     """For one team, pick the top N players for each watchlist stat.
     `player_rankings_by_stat` is a dict {stat_code: {team: [(league_rank,
     player, avg), ...]}} pre-built from cached fetches. Returns
     {stat_code: [(league_rank, player, avg) top N]}. Stats with no players
     for this team are still present (as empty lists) so the renderer can
-    decide whether to show them."""
+    decide whether to show them.
+
+    Pulls a deeper slice (2× the displayed count) so the post-selections
+    filter has substitutes to draw from when a top-ranked player has been
+    dropped from this week's named team. The renderer still only displays
+    H2H_WATCHLIST_TOP_N, but having the next 3 ready means we can slide
+    them up cleanly when Daicos / Petracca / whoever is ruled out."""
     result = {}
+    slice_size = H2H_WATCHLIST_TOP_N * 2  # 6 instead of 3
     for stat_code, _label, _glyph in H2H_WATCHLIST_STATS:
         team_data = (player_rankings_by_stat.get(stat_code) or {}).get(canonical_name, [])
         # Page is already sorted by average DESC, so a simple slice gives top N
-        result[stat_code] = team_data[:H2H_WATCHLIST_TOP_N]
+        result[stat_code] = team_data[:slice_size]
     return result
+
+
+def _player_match_key(name):
+    """Build a (first_initial, surname) key from a player name for matching
+    between footywire's short forms ('N Daicos') and full forms
+    ('Nicholas Daicos'). Returns ('n', 'daicos') for either.
+
+    Handles edge cases the renderer also handles:
+    - Particle-prefixed surnames: 'Sam De Koning' → ('s', 'de koning')
+    - Apostrophes: "Liam O'Brien" → ('l', 'obrien')
+    - Hyphens: 'Maurice Rioli-Jr' or 'Wanganeen-Milera' kept as single token
+    Returns None for unparseable input."""
+    if not name:
+        return None
+    surname = _player_surname(name)
+    if not surname:
+        return None
+    surname_key = _normalise_player_name(surname)
+    # First initial — strip whitespace, lowercase first char
+    first_token = str(name).strip().split()[0] if str(name).strip() else ""
+    if not first_token:
+        return None
+    first_initial = first_token[0].lower()
+    return (first_initial, surname_key)
+
+
+def filter_watchlist_for_selections(extended_watchlist, outs_list, top_n=None):
+    """Take the deeper watchlist (built by build_h2h_watchlist) and remove
+    any player who appears in the team's `outs` list for this match — then
+    slice the result down to the display count.
+
+    The match logic uses (first_initial, surname) so 'N Daicos' on the
+    selections page matches 'Nicholas Daicos' in the rankings, but does
+    NOT collide with 'J Daicos' (his brother Josh, also at Collingwood).
+
+    `outs_list` is the list of player dicts from selections_data, each
+    with at least a 'name' field. May be empty (team going in unchanged)
+    in which case no filtering happens.
+
+    Returns a watchlist of the same shape as build_h2h_watchlist but
+    capped at `top_n` displayed players per stat."""
+    if top_n is None:
+        top_n = H2H_WATCHLIST_TOP_N
+    if not outs_list:
+        # No outs to filter against — just trim to display count
+        return {stat: players[:top_n] for stat, players in extended_watchlist.items()}
+    # Build a set of (initial, surname) keys for everyone dropped this week
+    out_keys = set()
+    for out_player in outs_list:
+        out_name = out_player.get("name", "") if isinstance(out_player, dict) else str(out_player)
+        key = _player_match_key(out_name)
+        if key:
+            out_keys.add(key)
+    if not out_keys:
+        return {stat: players[:top_n] for stat, players in extended_watchlist.items()}
+    # For each stat, skip any ranked player whose key matches an out
+    filtered = {}
+    for stat, players in extended_watchlist.items():
+        kept = []
+        for entry in players:
+            # entry is (league_rank, player_name, avg)
+            _, player_name, _ = entry
+            entry_key = _player_match_key(player_name)
+            if entry_key and entry_key in out_keys:
+                continue  # Player is out for this match — skip
+            kept.append(entry)
+            if len(kept) >= top_n:
+                break
+        filtered[stat] = kept
+    return filtered
 
 
 @st.cache_data(ttl=3600, show_spinner=False)  # 1h TTL — H2H games rarely change mid-week
@@ -5518,54 +5836,24 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
                 f'</span>'
             )
 
-        def _player_surname(name):
-            """Derive a 'surname-only' display form for narrow viewports.
-            Rules:
-              • Hyphenated surnames stay intact (Wanganeen-Milera, not
-                just Milera) — those compound names are how those players
-                are known and splitting them loses identity.
-              • Surnames with particles ('De', 'Van', 'Van der', 'Le',
-                'O'') keep the particle attached (Sam De Koning → 'De Koning',
-                not 'Koning').
-              • One-word names fall back to the whole name unchanged.
-              • Empty / malformed input falls back to the original string.
-            Examples:
-              Lachie Neale          → Neale
-              Tyson Stengle         → Stengle
-              Sam De Koning         → De Koning
-              Wanganeen-Milera      → Wanganeen-Milera (single token, kept whole)
-              Joel Jeffrey          → Jeffrey
-              Connor O'Sullivan     → O'Sullivan
-            """
-            parts = (name or "").strip().split()
-            if not parts:
-                return name
-            if len(parts) == 1:
-                return parts[0]
-            # If the second-to-last token is a known particle, glue it
-            # back onto the surname. The set is small but covers the most
-            # common AFL surname patterns. Lowercased for case-insensitive
-            # matching since some sources capitalise differently.
-            PARTICLES = {"de", "van", "der", "le", "la", "du", "von"}
-            if len(parts) >= 3 and parts[-2].lower() in PARTICLES:
-                # Handle "Van der X" → "Van der X" (three-token surname)
-                if len(parts) >= 4 and parts[-3].lower() in PARTICLES:
-                    return " ".join(parts[-3:])
-                return " ".join(parts[-2:])
-            return parts[-1]
-
         def _watch_row_html(league_rank, player_name, avg, is_team_leader=False):
             """Build one player row inside a stat block. `is_team_leader`
             marks the highest-average player on this team for this stat —
             CSS uses it to subtly lift their row above the rest. This is
             independent of the league-wide medal styling on data-rank.
 
-            Name display: surname only on ALL viewports. The full first
-            name was eating horizontal space without adding identification
-            value — fans recognise players by surname anyway, and the
-            larger headshot now carries the visual identification weight.
-            The _player_surname helper handles edge cases (De Koning,
-            O'Sullivan, hyphenated names like Wanganeen-Milera)."""
+            Layout: a 2-column grid — headshot, then a text block holding
+            the name (with inline rank prefix) and the average. On desktop
+            the text block is a horizontal flex row (name | avg). On phone
+            the text block flips to a vertical stack (name above, avg
+            below as the big punchline). This solves the longstanding
+            mobile name-truncation problem by removing the horizontal
+            competition between name and avg entirely.
+
+            Name: surname only on all viewports (full first names eat
+            horizontal space without adding identification value — fans
+            recognise players by surname). The _player_surname helper
+            handles edge cases (De Koning, O'Sullivan, Wanganeen-Milera)."""
             crown_html = (
                 '<span class="mc-h2h-w-crown" aria-label="League leader">♕</span>'
                 if league_rank == 1 else ''
@@ -5576,9 +5864,13 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
             return (
                 f'<div class="mc-h2h-w-row" data-rank="{rank_attr}"{leader_attr}>'
                 f'  {_headshot_html(player_name)}'
-                f'  <span class="mc-h2h-w-rank">{league_rank}</span>'
-                f'  <span class="mc-h2h-w-name" style="--row-rank:\'#{league_rank}\';">{crown_html}{surname}</span>'
-                f'  <span class="mc-h2h-w-avg">{avg:.1f}</span>'
+                f'  <div class="mc-h2h-w-text">'
+                f'    <span class="mc-h2h-w-name">'
+                f'      <span class="mc-h2h-w-rank-inline">#{league_rank}</span>'
+                f'      {crown_html}{surname}'
+                f'    </span>'
+                f'    <span class="mc-h2h-w-avg">{avg:.1f}</span>'
+                f'  </div>'
                 f'</div>'
             )
 
@@ -6065,8 +6357,19 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
         h2h_meetings_for_game = build_h2h_meetings(home, away, h2h_game_pool)
         # Cheap dict lookups — the heavy scraping was already done during
         # the loading overlay and is now sitting in @st.cache_data
-        home_watchlist = build_h2h_watchlist(canonical(home), h2h_player_rankings)
-        away_watchlist = build_h2h_watchlist(canonical(away), h2h_player_rankings)
+        home_watchlist_ext = build_h2h_watchlist(canonical(home), h2h_player_rankings)
+        away_watchlist_ext = build_h2h_watchlist(canonical(away), h2h_player_rankings)
+        # ── Selections-aware filtering ──
+        # If teams have been named, drop any ruled-out player from the
+        # watchlist and slide the next-best up. Pre-naming this is a
+        # no-op (no outs to filter against), so we still see top
+        # season-average players. Post-naming we see "who's actually
+        # playing this week" — the watchlist becomes match-accurate.
+        _sel_record = get_selections_for_game(home, away, selections_data)
+        _home_outs = (_sel_record or {}).get("home", {}).get("outs", []) if _sel_record else []
+        _away_outs = (_sel_record or {}).get("away", {}).get("outs", []) if _sel_record else []
+        home_watchlist = filter_watchlist_for_selections(home_watchlist_ext, _home_outs)
+        away_watchlist = filter_watchlist_for_selections(away_watchlist_ext, _away_outs)
         h2h_block_html = render_h2h_block(
             home, away, h2h_rankings, h2h_meetings_for_game,
             _h2h_rankings_status,
@@ -10099,6 +10402,103 @@ st.markdown("""
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+   LIVE-NOW BANNER (Performance tab)
+   Appears ONLY when at least one game is currently in progress. Signals
+   to the user that the data on this page is moving and offers an explicit
+   refresh button so they can pull the latest snapshot. Honest UX: tell
+   the user "stuff is happening, here's the button" rather than
+   auto-polling which interrupts whatever they're reading.
+   ════════════════════════════════════════════════════════════════════════ */
+.perf-live-banner{
+    margin:14px 14px 0;
+    padding:11px 14px;
+    background:linear-gradient(90deg,
+        rgba(52,211,153,0.07) 0%,
+        rgba(52,211,153,0.025) 70%,
+        rgba(5,5,10,0) 100%);
+    border:1px solid rgba(52,211,153,0.28);
+    border-radius:8px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:8px;
+    font-family:var(--mono);
+}
+.perf-live-banner-l{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
+}
+.perf-live-banner-dot{
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:#22d39e;
+    box-shadow:0 0 8px rgba(52,211,153,0.7);
+    animation:perf-live-banner-pulse 1.4s ease-in-out infinite;
+    flex-shrink:0;
+}
+@keyframes perf-live-banner-pulse{
+    0%, 100% {opacity:1; transform:scale(1);}
+    50%      {opacity:0.45; transform:scale(0.85);}
+}
+.perf-live-banner-lbl{
+    font-size:0.6rem;
+    font-weight:800;
+    letter-spacing:0.14em;
+    color:var(--white);
+    text-transform:uppercase;
+}
+.perf-live-banner-sub{
+    font-size:0.5rem;
+    font-weight:600;
+    letter-spacing:0.08em;
+    color:var(--text2);
+    text-transform:uppercase;
+}
+/* Restyle Streamlit's form submit button inside the live banner section.
+   Targets the form by key prefix — Streamlit renders form_submit_buttons
+   inside a div with [data-testid] of "stFormSubmitButton". We can scope
+   to descendants of an element that follows a perf-live-banner sibling. */
+.perf-live-banner + div [data-testid="stFormSubmitButton"] button,
+.perf-live-banner ~ div [data-testid="stFormSubmitButton"] button{
+    background:rgba(52,211,153,0.12) !important;
+    border:1px solid rgba(52,211,153,0.45) !important;
+    color:#22d39e !important;
+    font-family:var(--mono) !important;
+    font-size:0.6rem !important;
+    font-weight:800 !important;
+    letter-spacing:0.14em !important;
+    text-transform:uppercase !important;
+    padding:7px 14px !important;
+    border-radius:6px !important;
+    min-height:0 !important;
+    line-height:1 !important;
+    transition:all 0.18s ease !important;
+}
+.perf-live-banner + div [data-testid="stFormSubmitButton"] button:hover,
+.perf-live-banner ~ div [data-testid="stFormSubmitButton"] button:hover{
+    background:rgba(52,211,153,0.22) !important;
+    border-color:rgba(52,211,153,0.7) !important;
+    box-shadow:0 0 12px rgba(52,211,153,0.3) !important;
+}
+.perf-live-banner + div [data-testid="stFormSubmitButton"] button:active,
+.perf-live-banner ~ div [data-testid="stFormSubmitButton"] button:active{
+    transform:scale(0.97) !important;
+}
+/* Mobile: tighten paddings */
+@media (max-width:520px){
+    .perf-live-banner{
+        margin:12px 12px 0;
+        padding:9px 11px;
+    }
+    .perf-live-banner-lbl{font-size:0.54rem;}
+    .perf-live-banner-sub{display:none;}
+}
+
+/* ════════════════════════════════════════════════════════════════════════
    BENCHMARK QUADRANT CHART
    2D scatter showing our model vs other industry tipping models. The
    single highest-confidence visual on the page — punters can see at a
@@ -10158,6 +10558,71 @@ st.markdown("""
     text-transform:uppercase;
     line-height:1;
 }
+/* ── Live indicator in the eyebrow row ──
+   Pulsing green dot + "TRACKING LIVE" label, right-aligned. Same visual
+   idiom as the bottom status bar's FEED LIVE indicator — signals the
+   chart is monitoring active data rather than a static snapshot. */
+.perf-quad-eyebrow-live{
+    margin-left:auto;
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    font-family:var(--mono);
+}
+.perf-quad-eyebrow-live-dot{
+    width:6px;
+    height:6px;
+    border-radius:50%;
+    background:#22d39e;
+    box-shadow:0 0 6px rgba(52,211,153,0.7);
+    animation:perf-quad-live-pulse 1.6s ease-in-out infinite;
+}
+.perf-quad-eyebrow-live-lbl{
+    font-size:0.42rem;
+    font-weight:800;
+    letter-spacing:0.18em;
+    color:rgba(52,211,153,0.9);
+    text-transform:uppercase;
+}
+@keyframes perf-quad-live-pulse{
+    0%, 100% {opacity:1; transform:scale(1);}
+    50%      {opacity:0.4; transform:scale(0.85);}
+}
+/* ── Radar sweep bar at top of chart wrap ──
+   Thin green line traces left to right and resets — the visual idiom
+   of "monitoring in progress." Sits absolutely at the top, doesn't
+   take any layout space. Slow enough (~4s cycle) to feel ambient
+   rather than fidgety. */
+.perf-quad-sweep{
+    position:absolute;
+    top:0; left:0; right:0;
+    height:1px;
+    overflow:hidden;
+    pointer-events:none;
+    z-index:1;
+}
+.perf-quad-sweep::after{
+    content:'';
+    position:absolute;
+    top:0; left:-30%;
+    width:30%; height:100%;
+    background:linear-gradient(90deg,
+        transparent 0%,
+        rgba(52,211,153,0.85) 50%,
+        transparent 100%);
+    animation:perf-quad-sweep-move 4.5s linear infinite;
+}
+@keyframes perf-quad-sweep-move{
+    0%   {left:-30%;}
+    100% {left:100%;}
+}
+@media (prefers-reduced-motion: reduce){
+    .perf-quad-other{opacity:1; animation:none;}
+    .perf-quad-ours-coord{stroke-dashoffset:0; opacity:1; animation:none;}
+    .perf-quad-ours-coord-tick{opacity:1; animation:none;}
+    .perf-quad-sweep::after{animation:none; display:none;}
+    .perf-quad-eyebrow-live-dot{animation:none;}
+}
 
 /* SVG-level styling. All graphical elements rendered server-side; CSS
    handles colours and stroke widths so theme tweaks live in one place. */
@@ -10188,19 +10653,68 @@ st.markdown("""
     stroke-dasharray:3 3;
     pointer-events:none;
 }
-.perf-quad-elite-lbl{
+/* Quadrant region labels — shared base + per-region variant */
+.perf-quad-q-lbl{
     font-size:7.5px;
     font-weight:800;
-    fill:rgba(52,211,153,0.55);
-    letter-spacing:0.2em;
+    letter-spacing:0.18em;
     text-transform:uppercase;
+    pointer-events:none;
+}
+.perf-quad-q-elite{
+    fill:rgba(52,211,153,0.55);
+}
+.perf-quad-q-other{
+    fill:rgba(160,170,185,0.28);
 }
 /* Industry models — quiet grey dots, no labels. We never expose source
-   identities; they're a generic benchmark cloud. */
+   identities; they're a generic benchmark cloud. Each dot fades in with
+   a slight delay (--i custom property set inline by the renderer) for a
+   "data populating" feel on first reveal. */
 .perf-quad-other{
     fill:rgba(180,190,210,0.32);
     stroke:rgba(180,190,210,0.55);
     stroke-width:0.8;
+    /* Each dot animates: fade in + slight scale punch on entry */
+    opacity:0;
+    transform-origin:center;
+    transform-box:fill-box;
+    animation:perf-quad-dot-in 0.55s cubic-bezier(0.34,1.56,0.64,1) both;
+    /* Stagger by index: dot 0 starts at 0.1s, dot 1 at 0.13s, etc. */
+    animation-delay:calc(0.1s + var(--i, 0) * 0.025s);
+}
+@keyframes perf-quad-dot-in{
+    0%   {opacity:0; transform:scale(0.3);}
+    70%  {opacity:0.55;}
+    100% {opacity:1; transform:scale(1);}
+}
+/* ── Coordinate readout lines from OURS to the axes ──
+   Thin dashed lines that drop from the OURS dot to both axes, with
+   small dots at the axis terminations. Punter can read off exact
+   coordinates without squinting at where the dot sits relative to
+   the gridlines. */
+.perf-quad-ours-coord{
+    stroke:rgba(52,211,153,0.45);
+    stroke-width:0.8;
+    stroke-dasharray:2 2;
+    pointer-events:none;
+    /* Draws in after the OURS dot appears */
+    stroke-dashoffset:60;
+    animation:perf-quad-coord-draw 0.7s ease-out 1.2s both;
+}
+@keyframes perf-quad-coord-draw{
+    0%   {stroke-dashoffset:60; opacity:0;}
+    50%  {opacity:0.55;}
+    100% {stroke-dashoffset:0;  opacity:1;}
+}
+.perf-quad-ours-coord-tick{
+    fill:rgba(52,211,153,0.7);
+    stroke:none;
+    opacity:0;
+    animation:perf-quad-fade-in 0.4s ease-out 1.8s forwards;
+}
+@keyframes perf-quad-fade-in{
+    to {opacity:1;}
 }
 /* Our point — the hero. Halo + ring + filled core for depth. */
 .perf-quad-ours-halo{
@@ -10302,6 +10816,46 @@ st.markdown("""
     font-size:0.44rem;
     letter-spacing:0.08em;
     text-transform:lowercase;
+}
+/* ── Gap to leader rows ──
+   The story of "how close to elite" — companions to the rank rows.
+   Same indentation, similar prominence, but distinct visual treatment:
+   the gap *value* is white (the punchline number) while the leader-
+   relative label is dim (the context). When OURS IS the leader, the
+   normal "+X tips behind" line is replaced with a small gold badge
+   reading "LEADING THE FIELD" — earned celebration. */
+.perf-quad-legend-gap{
+    padding-left:14px;
+    gap:6px;
+}
+.perf-quad-legend-gap-lbl{
+    font-size:0.42rem;
+    font-weight:700;
+    letter-spacing:0.18em;
+    color:var(--text3);
+    text-transform:uppercase;
+}
+.perf-quad-legend-gap-val{
+    color:var(--white);
+    font-weight:800;
+    font-variant-numeric:tabular-nums;
+    letter-spacing:0.04em;
+    font-size:0.54rem;
+}
+.perf-quad-legend-gap-sub{
+    color:var(--text3);
+    font-weight:600;
+    font-size:0.44rem;
+    letter-spacing:0.08em;
+    text-transform:lowercase;
+}
+.perf-quad-legend-gap-leading{
+    color:#fbbf24;  /* gold — earned, not arbitrary */
+    font-weight:800;
+    font-size:0.5rem;
+    letter-spacing:0.14em;
+    text-shadow:0 0 6px rgba(251,191,36,0.45);
+    text-transform:uppercase;
 }
 .perf-quad-legend-dot{
     width:9px; height:9px;
@@ -11948,17 +12502,35 @@ def main():
     else:
         mae_color = "var(--red)"
 
-    # Trend chip for the hero header
+    # Trend chip for the hero header — explicit about the comparison window
+    # ("L10 vs PRIOR") so the punter understands what number they're seeing.
+    # Previously read "-11PTS RECENT" which was both vague (which window?)
+    # and used the wrong unit (pts implies points, not percentage points).
     if trend_dir == "up":
-        trend_chip = f'<span class="hero-trend up">▲ +{trend_delta:.0f}pts recent</span>'
+        trend_chip = f'<span class="hero-trend up">▲ +{trend_delta:.0f}pp L10 vs prior</span>'
     elif trend_dir == "down":
-        trend_chip = f'<span class="hero-trend dn">▼ {trend_delta:.0f}pts recent</span>'
+        trend_chip = f'<span class="hero-trend dn">▼ {abs(trend_delta):.0f}pp L10 vs prior</span>'
     else:
         trend_chip = ''
 
-    last_rnd_rate = series[-1] if series else sr
+    # ── Last-round rate display ──
+    # We show "last round rate vs season avg" but ONLY when the latest
+    # round has enough games to be a meaningful comparison. A single
+    # completed tip showing "0% -79 vs avg" is technically correct math
+    # but misleading display — punishes a model for an early-round bad
+    # tip in a sample of 1. Require at least 4 games in the latest round
+    # before showing the delta.
+    last_round_games = tracker[-1]["games"] if tracker else []
+    latest_round_n = len(last_round_games)
+    last_rnd_rate = (sum(1 for g in last_round_games if g["correct"])
+                     / latest_round_n * 100) if latest_round_n > 0 else sr
     rnd_delta = last_rnd_rate - sr
-    if abs(rnd_delta) < 3:
+    if latest_round_n < 4:
+        # Latest round has too few games — just show the season rate
+        # without a delta comparison. We're not hiding the panel, just
+        # not making a bad statistical claim.
+        spark_val_html = f'<div class="hero-t-spark-val">{sr:.0f}%</div>'
+    elif abs(rnd_delta) < 3:
         spark_val_html = f'<div class="hero-t-spark-val">{last_rnd_rate:.0f}%</div>'
     elif rnd_delta > 0:
         spark_val_html = f'<div class="hero-t-spark-val"><span class="spark-val-num">{last_rnd_rate:.0f}%</span><span class="spark-val-delta up">+{rnd_delta:.0f} vs avg</span></div>'
@@ -11974,6 +12546,50 @@ def main():
         hero_mood = "mood-watching"
     else:
         hero_mood = "mood-cooling"
+
+    # ── Per-cell qualifiers ──
+    # Each number in the bottom strip gets a tiny status pip + one-word
+    # qualifier that tells the punter what to FEEL about it. Pip colour:
+    # green=elite, amber=watching, grey=neutral, red=alarm. Words are
+    # calibrated against realistic AFL tipping benchmarks — top of Squiggle
+    # cluster at 79-83% strike, MAE 24-26.
+    #
+    # CORRECT cell — the punter wants to know "is this a good count?"
+    if sr >= 75:
+        tc_tone, tc_qual = "g", "ELITE FORM"
+    elif sr >= 65:
+        tc_tone, tc_qual = "g", "STRONG"
+    elif sr >= 55:
+        tc_tone, tc_qual = "a", "STEADY"
+    else:
+        tc_tone, tc_qual = "n", "BUILDING"
+    # WRONG cell — same scale inverted
+    wrong_rate = (tw / tp * 100) if tp > 0 else 0
+    if wrong_rate <= 25:
+        tw_tone, tw_qual = "n", "MANAGED"
+    elif wrong_rate <= 35:
+        tw_tone, tw_qual = "a", "WATCHING"
+    else:
+        tw_tone, tw_qual = "r", "ELEVATED"
+    # MARGIN ERR cell — calibrated to industry: 24-26 elite, 26-28 strong,
+    # 28-30 average, 30+ loose. Top Squiggle model sits at 24.26.
+    if mae <= 26:
+        mae_tone, mae_qual = "g", "TOP TIER"
+    elif mae <= 28:
+        mae_tone, mae_qual = "g", "SHARP"
+    elif mae <= 30:
+        mae_tone, mae_qual = "a", "AVERAGE"
+    else:
+        mae_tone, mae_qual = "r", "LOOSE"
+    # LAST 10 cell — measures current form vs season average
+    if l10_t == 0:
+        l10_tone, l10_qual = "n", "—"
+    elif l10_pct >= sr + 5:
+        l10_tone, l10_qual = "g", "HEATING"
+    elif l10_pct >= sr - 5:
+        l10_tone, l10_qual = "n", "ON PACE"
+    else:
+        l10_tone, l10_qual = "a", "COOLING"
 
     # Heartbeat tempo — faster when on a hot streak, slower when cold
     if streak_n >= 5 and streak_kind == "W":
@@ -12025,10 +12641,10 @@ def main():
         {spark_val_html}
       </div>
       <div class="hero-t-stats">
-        <div class="hts g"><div class="hts-num">{tc}</div><div class="hts-lbl">CORRECT</div></div>
-        <div class="hts r"><div class="hts-num">{tw}</div><div class="hts-lbl">WRONG</div></div>
-        <div class="hts a"><div class="hts-num" style="color:{mae_color};">{mae:.1f}</div><div class="hts-lbl">MARGIN ERR</div></div>
-        <div class="hts p"><div class="hts-num">{l10_c}<span class="pct">/{l10_t}</span></div><div class="hts-lbl">LAST 10</div></div>
+        <div class="hts g"><div class="hts-num">{tc}</div><div class="hts-lbl">CORRECT</div><div class="hts-qual hts-qual-{tc_tone}"><span class="hts-pip"></span>{tc_qual}</div></div>
+        <div class="hts r"><div class="hts-num">{tw}</div><div class="hts-lbl">WRONG</div><div class="hts-qual hts-qual-{tw_tone}"><span class="hts-pip"></span>{tw_qual}</div></div>
+        <div class="hts a"><div class="hts-num" style="color:{mae_color};">{mae:.1f}</div><div class="hts-lbl">MARGIN ERR</div><div class="hts-qual hts-qual-{mae_tone}"><span class="hts-pip"></span>{mae_qual}</div></div>
+        <div class="hts p"><div class="hts-num">{l10_c}<span class="pct">/{l10_t}</span></div><div class="hts-lbl">LAST 10</div><div class="hts-qual hts-qual-{l10_tone}"><span class="hts-pip"></span>{l10_qual}</div></div>
       </div>
       <div class="hero-t-idstrip">
         <span class="ids-cell"><span class="ids-k">SYS</span><span class="ids-v">AFL/TERM</span></span>
@@ -12147,6 +12763,54 @@ def main():
         # precision, calibration, and the granular round-by-round receipts.
         if tracker:
             st.markdown('<div class="perf-scope">', unsafe_allow_html=True)
+
+            # ── Live-now detector ──
+            # Scan all season games for any currently in progress. When live,
+            # we surface a small banner with a refresh button so the user
+            # knows the data is moving and can pull the latest snapshot
+            # whenever a game finishes. This is the honest pattern: tell
+            # the user "stuff is happening, here's the button" rather than
+            # auto-polling which interrupts whatever they're reading.
+            all_year_games = get_all_games(year)
+            live_count = 0
+            for _g in all_year_games:
+                try:
+                    _status, _pct = game_status(_g)
+                    if _status == "live":
+                        live_count += 1
+                except Exception:
+                    continue
+
+            if live_count > 0:
+                # Tappable live banner. The form_submit_button approach gives
+                # a clean refresh hook that busts our short caches (2min TTL)
+                # and reruns the script — by the next render, completed-game
+                # results will have landed in the tracker.
+                _plural = "GAME" if live_count == 1 else "GAMES"
+                refresh_clicked = False
+                with st.form(key="perf_live_refresh_form", clear_on_submit=False):
+                    st.markdown(_h(f"""
+                    <div class="perf-live-banner">
+                      <div class="perf-live-banner-l">
+                        <span class="perf-live-banner-dot"></span>
+                        <span class="perf-live-banner-lbl">{live_count} {_plural} IN PROGRESS</span>
+                        <span class="perf-live-banner-sub">· STATS UPDATE AS RESULTS LAND</span>
+                      </div>
+                    </div>
+                    """), unsafe_allow_html=True)
+                    refresh_clicked = st.form_submit_button(
+                        "↻  PULL LATEST",
+                        use_container_width=False,
+                    )
+                if refresh_clicked:
+                    # Bust the 2-minute caches on the live-data endpoints
+                    # so the rerun grabs fresh games and tips.
+                    get_all_games.clear()
+                    get_all_tips.clear()
+                    get_current_round.clear()
+                    get_games.clear()
+                    get_tips.clear()
+                    st.rerun()
 
             # Quiet header — just the section name, no duplicated stats
             st.markdown(_h(f"""

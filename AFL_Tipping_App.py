@@ -1201,7 +1201,7 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 }
 .mc-mt-sel-row-unknown .mc-mt-sel-pct{display:none;}
 
-/* "No Changes Made" empty-state */
+/* "Same XI as last week" empty-state */
 .mc-mt-sel-empty{
   font-size:0.46rem; color:var(--text3);
   letter-spacing:0.04em;
@@ -1234,6 +1234,112 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
   font-weight:600;
   line-height:1.5;
   text-align:left;
+}
+
+/* ── Consolidated match-level pending banner ──
+   Single full-width strip below the matchup row, replacing the previous
+   per-team duplicated banners. Shows release date/time + live countdown
+   that updates every second via JS. Amber-toned to match the punter's
+   mental model that this is a "waiting" state. */
+.mc-pending-banner{
+  margin:14px 14px 0;
+  padding:9px 12px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:8px;
+  background:linear-gradient(90deg,
+    rgba(251,191,36,0.07) 0%,
+    rgba(251,191,36,0.025) 60%,
+    rgba(5,5,10,0) 100%);
+  border:1px solid rgba(251,191,36,0.28);
+  border-radius:6px;
+  font-family:var(--mono);
+}
+.mc-pending-banner-l,
+.mc-pending-banner-r{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  flex-wrap:wrap;
+}
+.mc-pending-glyph{
+  display:inline-flex;
+  align-items:center; justify-content:center;
+  width:14px; height:14px;
+  border-radius:2px;
+  background:rgba(251,191,36,0.12);
+  border:1px solid rgba(251,191,36,0.38);
+  color:var(--amber);
+  font-size:0.55rem; font-weight:800;
+  line-height:1;
+  animation:glyph-breathe 2.8s ease-in-out infinite;
+  flex-shrink:0;
+}
+.mc-pending-lbl{
+  font-size:0.55rem;
+  font-weight:800;
+  letter-spacing:0.14em;
+  color:var(--white);
+  text-transform:uppercase;
+}
+.mc-pending-sep{
+  color:rgba(251,191,36,0.35);
+  opacity:0.7;
+}
+.mc-pending-time{
+  font-size:0.52rem;
+  font-weight:700;
+  letter-spacing:0.1em;
+  color:var(--amber);
+  font-variant-numeric:tabular-nums;
+  text-transform:uppercase;
+}
+.mc-pending-cd-lbl{
+  font-size:0.46rem;
+  font-weight:700;
+  letter-spacing:0.16em;
+  color:var(--text2);
+  text-transform:uppercase;
+}
+.mc-pending-cd{
+  font-size:0.62rem;
+  font-weight:800;
+  letter-spacing:0.06em;
+  color:var(--amber);
+  font-variant-numeric:tabular-nums;
+  text-shadow:0 0 4px rgba(251,191,36,0.3);
+  min-width:60px;
+  text-align:right;
+}
+/* When the countdown hits zero we add a "ready" class via JS — the colour
+   flips green and the messaging changes to "lists out, refresh to view" */
+.mc-pending-cd.ready{
+  color:var(--green);
+  text-shadow:0 0 5px rgba(52,211,153,0.45);
+}
+.mc-pending-banner.ready{
+  background:linear-gradient(90deg,
+    rgba(52,211,153,0.08) 0%,
+    rgba(52,211,153,0.025) 60%,
+    rgba(5,5,10,0) 100%);
+  border-color:rgba(52,211,153,0.3);
+}
+.mc-pending-banner.ready .mc-pending-glyph{
+  background:rgba(52,211,153,0.12);
+  border-color:rgba(52,211,153,0.4);
+  color:var(--green);
+}
+@media (max-width:520px){
+  .mc-pending-banner{
+    margin:12px 12px 0;
+    padding:8px 10px;
+  }
+  .mc-pending-lbl{font-size:0.5rem;}
+  .mc-pending-time{font-size:0.46rem;}
+  .mc-pending-cd-lbl{font-size:0.42rem;}
+  .mc-pending-cd{font-size:0.56rem;}
 }
 
 /* Mobile — slightly more compact */
@@ -2080,6 +2186,33 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   letter-spacing:0.06em;
   color:var(--text3);
   line-height:1.3;
+}
+/* When the displayed top-3 has been adjusted for this week's named team
+   lists (someone in the top-3 was an Out and got slid down), the sub-
+   header turns green-tinted with a small pulsing pip. Tells the punter
+   "this panel reflects current reality, not just season-average data."
+   Also serves as a debug indicator — if filtering should have happened
+   but the sub-header still reads "season averages", we have a name-
+   matching bug worth investigating. */
+.mc-h2h-watch-sub-filtered{
+  color:rgba(52,211,153,0.85);
+  font-weight:600;
+}
+.mc-h2h-watch-sub-flag{
+  display:inline-block;
+  color:var(--green);
+  font-size:0.6em;
+  vertical-align:0.05em;
+  margin-right:3px;
+  text-shadow:0 0 4px rgba(52,211,153,0.5);
+  animation:h2h-watch-sub-pulse 2.2s ease-in-out infinite;
+}
+@keyframes h2h-watch-sub-pulse{
+  0%, 100% {opacity:1; transform:scale(1);}
+  50%      {opacity:0.45; transform:scale(0.85);}
+}
+@media (prefers-reduced-motion: reduce){
+  .mc-h2h-watch-sub-flag{animation:none;}
 }
 
 /* Two-column grid (home left, away right) with each stat as a small
@@ -3080,7 +3213,11 @@ def rank_models(games_subset, all_tips, sources):
             rows.append((model, acc, s["correct"], s["total"]))
             weights[model] = acc
     rows.sort(key=lambda x: (-x[1], -x[2], x[0]))
-    return [r[0] for r in rows[:6]], weights, rows
+    # Top 3 models — concentrated consensus among the most accurate tippers.
+    # Previously this was top-6 but the smoothing effect of including weaker
+    # models was diluting picks; tightening to top-3 gives the consensus more
+    # conviction by weighting only the elite few.
+    return [r[0] for r in rows[:3]], weights, rows
 
 
 def compute_model_quadrant_stats(games_subset, all_tips, sources, tracker=None,
@@ -3314,24 +3451,10 @@ def render_model_quadrant(year, current_round, sources, tracker):
         f'      width="{(W-PAD_R) - elite_x:.1f}" '
         f'      height="{elite_y - PAD_T:.1f}"/>'
     )
-    # Faint grid lines
-    for t in x_ticks:
-        x_pos = _x(t)
-        if PAD_L <= x_pos <= W - PAD_R:
-            parts.append(
-                f'<line class="perf-quad-grid" '
-                f'      x1="{x_pos:.1f}" y1="{PAD_T}" '
-                f'      x2="{x_pos:.1f}" y2="{H-PAD_B}"/>'
-            )
-    for t in y_ticks:
-        y_pos = _y(t)
-        if PAD_T <= y_pos <= H - PAD_B:
-            parts.append(
-                f'<line class="perf-quad-grid" '
-                f'      x1="{PAD_L}" y1="{y_pos:.1f}" '
-                f'      x2="{W-PAD_R}" y2="{y_pos:.1f}"/>'
-            )
-    # Median split lines (dashed)
+    # Median split lines (dashed) — define the four quadrants. We deliberately
+    # do NOT draw a finer grid on top of these: the median lines plus the axis
+    # ticks give enough spatial reference, and adding gridlines turns the chart
+    # background into noisy hatching that fights the dots.
     parts.append(
         f'<line class="perf-quad-median" '
         f'      x1="{elite_x:.1f}" y1="{PAD_T}" '
@@ -3373,47 +3496,25 @@ def render_model_quadrant(year, current_round, sources, tracker):
         f'      text-anchor="start">TRAILING</text>'
     )
 
-    # ── Industry points — quiet grey, fading in with staggered delay ──
-    # The staggered fade-in is the "live data populating" effect — gives
-    # the chart a sense of activity even though the data is static once
-    # rendered. CSS uses the --i custom property to compute each dot's
-    # animation-delay, so dot 0 appears first and dot 30 last.
-    for i, p in enumerate(industry_pts):
+    # ── Industry points — quiet grey, static ──
+    # Render flat without staggered fade-in. The previous animation
+    # ("data populating" effect) created a 1+ second wait before the
+    # full cloud was visible, and added decorative motion that fought
+    # the OURS halo for attention. Cleaner to render the full cloud
+    # instantly so the user can read positions immediately.
+    for p in industry_pts:
         cx, cy = _x(p["strike_rate"]), _y(p["mae"])
         parts.append(
             f'<circle class="perf-quad-other" '
-            f'        cx="{cx:.1f}" cy="{cy:.1f}" r="3.4" '
-            f'        style="--i:{i};"/>'
+            f'        cx="{cx:.1f}" cy="{cy:.1f}" r="3.4"/>'
         )
 
     # Our point — large, ringed, glowing.
     our_x, our_y = _x(our_pt["strike_rate"]), _y(our_pt["mae"])
-    # ── Coordinate readout lines from OURS to both axes ──
-    # Thin dashed lines that drop from OURS to the X axis and across to
-    # the Y axis, so the punter can read off exact coordinates without
-    # squinting. Draws BEFORE the dot itself so the dot sits on top.
-    parts.append(
-        f'<line class="perf-quad-ours-coord" '
-        f'      x1="{our_x:.1f}" y1="{our_y:.1f}" '
-        f'      x2="{our_x:.1f}" y2="{H-PAD_B:.1f}"/>'
-    )
-    parts.append(
-        f'<line class="perf-quad-ours-coord" '
-        f'      x1="{our_x:.1f}" y1="{our_y:.1f}" '
-        f'      x2="{PAD_L:.1f}" y2="{our_y:.1f}"/>'
-    )
-    # Small ticks at the axis terminations of the connector lines so the
-    # eye reads them as deliberate readouts rather than noise.
-    parts.append(
-        f'<circle class="perf-quad-ours-coord-tick" '
-        f'        cx="{our_x:.1f}" cy="{H-PAD_B:.1f}" r="2"/>'
-    )
-    parts.append(
-        f'<circle class="perf-quad-ours-coord-tick" '
-        f'        cx="{PAD_L:.1f}" cy="{our_y:.1f}" r="2"/>'
-    )
-
-    # Now draw the OURS dot stack — halo, ring, core (back-to-front)
+    # Draw the OURS dot stack — halo, ring, core (back-to-front). The legend
+    # below the chart already publishes the exact strike/MAE figures, so we
+    # don't need on-chart coord-readout lines (previously these dropped from
+    # OURS to both axes — that pattern over-hatched the chart center).
     parts.append(
         f'<circle class="perf-quad-ours-halo" '
         f'        cx="{our_x:.1f}" cy="{our_y:.1f}" r="14"/>'
@@ -3502,45 +3603,34 @@ def render_model_quadrant(year, current_round, sources, tracker):
     leader_strike = max((p["strike_rate"] for p in industry_pts), default=None)
     leader_mae    = min((p["mae"]         for p in industry_pts), default=None)
 
+    # Build the gap fragments (concise — designed to live inside one row)
     if strike_rank == 1:
-        strike_gap_html = (
-            '<span class="perf-quad-legend-gap-lbl">STRIKE</span>'
-            '<span class="perf-quad-legend-gap-leading">◆ LEADING THE FIELD</span>'
-        )
+        strike_gap_frag = '<span class="perf-quad-legend-gap-leading">◆ LEADER</span>'
     elif leader_strike is not None and our_sample > 0:
         rate_gap_pp = leader_strike - our_pt["strike_rate"]
-        # Count-equivalent: at leader's rate over our sample, leader
-        # would have round(sample × leader_rate / 100) correct.
         leader_eq_count = round(our_sample * leader_strike / 100.0)
         our_count = round(our_sample * our_pt["strike_rate"] / 100.0)
         tip_gap = max(0, leader_eq_count - our_count)
-        # "1 TIP BEHIND" vs "3 TIPS BEHIND" — pluralise honestly
-        tip_word = "TIP" if tip_gap == 1 else "TIPS"
-        strike_gap_html = (
-            f'<span class="perf-quad-legend-gap-lbl">STRIKE GAP</span>'
-            f'<span class="perf-quad-legend-gap-val">{tip_gap} {tip_word}</span>'
-            f'<span class="perf-quad-legend-gap-sub">behind leader · {rate_gap_pp:.1f}pp</span>'
+        tip_word = "tip" if tip_gap == 1 else "tips"
+        strike_gap_frag = (
+            f'<span class="perf-quad-legend-gap-sub">{tip_gap} {tip_word} off</span>'
         )
     else:
-        strike_gap_html = ''
+        strike_gap_frag = ''
 
     if mae_rank == 1:
-        mae_gap_html = (
-            '<span class="perf-quad-legend-gap-lbl">MARGIN</span>'
-            '<span class="perf-quad-legend-gap-leading">◆ LEADING THE FIELD</span>'
-        )
+        mae_gap_frag = '<span class="perf-quad-legend-gap-leading">◆ LEADER</span>'
     elif leader_mae is not None:
         mae_gap = our_pt["mae"] - leader_mae
-        mae_gap_html = (
-            f'<span class="perf-quad-legend-gap-lbl">MARGIN GAP</span>'
-            f'<span class="perf-quad-legend-gap-val">+{mae_gap:.1f}pts</span>'
-            f'<span class="perf-quad-legend-gap-sub">behind leader</span>'
+        mae_gap_frag = (
+            f'<span class="perf-quad-legend-gap-sub">+{mae_gap:.1f}pts off</span>'
         )
     else:
-        mae_gap_html = ''
+        mae_gap_frag = ''
 
     legend_html = (
         f'<div class="perf-quad-legend">'
+        # Row 1: OUR MODEL + headline numbers
         f'  <div class="perf-quad-legend-row">'
         f'    <span class="perf-quad-legend-dot perf-quad-legend-dot-ours"></span>'
         f'    <span class="perf-quad-legend-lbl">OUR MODEL</span>'
@@ -3549,41 +3639,30 @@ def render_model_quadrant(year, current_round, sources, tracker):
         f'    <span class="perf-quad-legend-sep">·</span>'
         f'    <span class="perf-quad-legend-val">{our_mae_str} MAE</span>'
         f'  </div>'
-        f'  <div class="perf-quad-legend-row perf-quad-legend-rank">'
-        f'    <span class="perf-quad-legend-rank-lbl">RANK</span>'
-        f'    <span class="perf-quad-legend-rank-val">#{strike_rank} of {total_n}</span>'
-        f'    <span class="perf-quad-legend-rank-sub">on strike</span>'
+        # Row 2: position — rank + gap, condensed into a single line per axis
+        f'  <div class="perf-quad-legend-row perf-quad-legend-position">'
+        f'    <span class="perf-quad-legend-rank-val">#{strike_rank}</span>'
+        f'    <span class="perf-quad-legend-rank-sub">strike · {strike_gap_frag}</span>'
         f'    <span class="perf-quad-legend-sep">·</span>'
-        f'    <span class="perf-quad-legend-rank-val">#{mae_rank} of {total_n}</span>'
-        f'    <span class="perf-quad-legend-rank-sub">on margin</span>'
+        f'    <span class="perf-quad-legend-rank-val">#{mae_rank}</span>'
+        f'    <span class="perf-quad-legend-rank-sub">margin · {mae_gap_frag}</span>'
         f'  </div>'
-        f'  <div class="perf-quad-legend-row perf-quad-legend-gap">'
-        f'    {strike_gap_html}'
-        f'  </div>'
-        f'  <div class="perf-quad-legend-row perf-quad-legend-gap">'
-        f'    {mae_gap_html}'
-        f'  </div>'
+        # Row 3: industry context
         f'  <div class="perf-quad-legend-row perf-quad-legend-row-quiet">'
         f'    <span class="perf-quad-legend-dot perf-quad-legend-dot-other"></span>'
         f'    <span class="perf-quad-legend-lbl">OTHER INDUSTRY TIPPING MODELS</span>'
         f'    <span class="perf-quad-legend-sep">·</span>'
-        f'    <span class="perf-quad-legend-val">{industry_n} BENCHMARKED</span>'
-        f'    <span class="perf-quad-legend-sep">·</span>'
-        f'    <span class="perf-quad-legend-val">{our_sample} TIPS · YTD</span>'
+        f'    <span class="perf-quad-legend-val">{industry_n} BENCHMARKED · {our_sample} TIPS YTD</span>'
         f'  </div>'
         f'</div>'
     )
 
     st.markdown(_h(f"""
     <div class="perf-quad-wrap">
-      <div class="perf-quad-sweep"></div>
       <div class="perf-quad-eyebrow">
         <span class="perf-quad-eyebrow-glyph">◇</span>
         <span class="perf-quad-eyebrow-lbl">Benchmark Position</span>
-        <span class="perf-quad-eyebrow-live">
-          <span class="perf-quad-eyebrow-live-dot"></span>
-          <span class="perf-quad-eyebrow-live-lbl">TRACKING LIVE</span>
-        </span>
+        <span class="perf-quad-eyebrow-sub">vs other industry tipping models · season to date</span>
       </div>
       {svg}
       {legend_html}
@@ -3780,6 +3859,116 @@ def teams_named_status(games):
     if hours_until > 28:
         return ("pending", earliest)
     return ("named", None)
+
+
+def team_list_release_dt(match_dt):
+    """Compute the AFL team-list release moment for a given match.
+
+    AFL procedure: team lists for the entire weekend round are released
+    in two batches, both at 6:30pm Melbourne local time:
+      • Thursday matches  → Wednesday 6:30pm Melbourne (the night before)
+      • Fri / Sat / Sun matches → Thursday 6:30pm Melbourne (all dropped
+                                  simultaneously, regardless of which day
+                                  in the weekend the match itself falls)
+
+    So a Sunday match's lists drop ~72h before kickoff alongside the
+    Friday and Saturday matches' lists — the AFL doesn't stagger them
+    per day. Previously the code naively did "match_day - 1" which was
+    wrong for Sat/Sun: it showed releases on the *day before* the match
+    instead of on the universal Thursday.
+
+    Returns a timezone-aware datetime in Australia/Melbourne (which is
+    AEST or AEDT depending on the date — ZoneInfo handles the transition
+    automatically across the season).
+
+    Input `match_dt` is the match's Perth-zoned datetime as used in the
+    rest of the app; we convert it to Melbourne, then walk back the
+    appropriate number of days and snap to 18:30."""
+    if match_dt is None:
+        return None
+    try:
+        mel_tz = ZoneInfo("Australia/Melbourne")
+        # Convert match start to Melbourne wall-clock time
+        match_mel = match_dt.astimezone(mel_tz)
+        # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+        wd = match_mel.weekday()
+        if wd == 3:  # Thursday match
+            # Lists drop Wednesday 6:30pm (the night before)
+            days_back = 1
+        elif wd in (4, 5, 6):  # Friday / Saturday / Sunday match
+            # All dropped together on Thursday 6:30pm of the same week
+            days_back = wd - 3  # 1 for Fri, 2 for Sat, 3 for Sun
+        else:
+            # Unusual (Mon/Tue/Wed) match — fall back to the Thursday
+            # BEFORE the match. weekday=0 (Mon) → 4 days back to prev Thu.
+            # weekday=1 (Tue) → 5. weekday=2 (Wed) → 6. This rarely fires
+            # in practice but handles Easter Monday / King's Birthday
+            # gracefully without breaking.
+            days_back = (wd - 3) % 7
+            if days_back == 0:
+                days_back = 7
+        release_date = (match_mel - timedelta(days=days_back)).date()
+        release_dt = datetime(
+            release_date.year, release_date.month, release_date.day,
+            18, 30, 0, tzinfo=mel_tz,
+        )
+        return release_dt
+    except Exception:
+        return None
+
+
+def render_match_pending_banner(match_dt, game_id):
+    """Single consolidated pending banner for a match where neither team's
+    list has been named yet. Replaces the previous per-team duplicated
+    banners with one cleaner full-width strip below the matchup row.
+
+    Includes a live countdown to the 6:30pm Melbourne release time. The
+    countdown is updated by a small JS block via setInterval on a DOM
+    node identified by `game_id` — this avoids requiring a page rerun
+    every second (which Streamlit cannot do anyway). When the countdown
+    hits zero, the banner gracefully switches to a "lists out" state
+    prompting the user to refresh."""
+    release_dt = team_list_release_dt(match_dt)
+    if release_dt is None:
+        # Fallback when match_dt is unavailable — show static message,
+        # no countdown.
+        return _h("""
+        <div class="mc-pending-banner">
+          <span class="mc-pending-glyph">!</span>
+          <span class="mc-pending-lbl">TEAM LISTS NOT YET RELEASED</span>
+        </div>
+        """)
+    # Format the release time for display in Melbourne local time.
+    # The label reads naturally to a punter — "Thu 6:30PM AEST" etc.
+    tz_abbr = release_dt.strftime("%Z")  # AEST or AEDT depending on date
+    weekday_lbl = release_dt.strftime("%a").upper()  # MON, TUE, etc.
+    hour = release_dt.hour
+    am_pm = "AM" if hour < 12 else "PM"
+    hour_12 = hour if hour <= 12 else hour - 12
+    if hour_12 == 0:
+        hour_12 = 12
+    time_lbl = f"{hour_12}:{release_dt.minute:02d}{am_pm}"
+    # ISO-format the release moment for JS consumption — JS parses this
+    # back to a Date object regardless of the user's local timezone.
+    release_iso = release_dt.isoformat()
+    # Element id — unique per game so multiple banners on the page each
+    # get their own countdown ticker.
+    cd_id = f"mc-pending-cd-{game_id}"
+    return _h(f"""
+    <div class="mc-pending-banner" data-release="{release_iso}">
+      <div class="mc-pending-banner-l">
+        <span class="mc-pending-glyph">!</span>
+        <span class="mc-pending-lbl">TEAM LISTS</span>
+        <span class="mc-pending-sep">·</span>
+        <span class="mc-pending-time">{weekday_lbl} {time_lbl} {tz_abbr}</span>
+      </div>
+      <div class="mc-pending-banner-r">
+        <span class="mc-pending-cd-lbl">DROPS IN</span>
+        <span class="mc-pending-cd" id="{cd_id}" data-release="{release_iso}">—</span>
+      </div>
+    </div>
+    """)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # SEASON ANALYTICS — for the premium scorecard
@@ -4348,34 +4537,20 @@ def render_team_selections_inline(team_name, opponent_name, selections_data, tea
 
     `match_dt` is the match's Perth-zoned datetime — used in the pending
     state to display when team lists are expected to be released:
-      • Thursday matches  → Wed 6:30pm release (the night-before drop)
-      • All other matches → Thu 6:30pm release (the standard round drop)
+      • Thursday matches  → Wed 12pm release (the night-before drop)
+      • All other matches → Thu 12pm release (the standard round drop)
 
     Returns empty string when there are no changes or no data record yet,
     so the team header stays clean for unnamed/unchanged teams."""
 
     record = get_selections_for_game(team_name, opponent_name, selections_data)
     if record is None:
-        # Teams not named yet — show a small amber pending hint with the
-        # expected release time so the punter knows when to come back.
-        # AFL convention: Thursday match team lists drop Wed 6:30pm AEST/AEDT,
-        # all other rounds' lists drop Thu 6:30pm.
-        release_msg = "Team list not yet named"
-        if match_dt is not None:
-            try:
-                # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
-                if match_dt.weekday() == 3:  # Thursday match
-                    release_msg = "Lists released Wed 6:30pm"
-                else:
-                    release_msg = "Lists released Thu 6:30pm"
-            except Exception:
-                pass
-        return _h(f"""
-        <div class="mc-mt-sel mc-mt-sel-pending">
-          <div class="mc-mt-sel-pending-glyph">!</div>
-          <div class="mc-mt-sel-pending-txt">{release_msg}</div>
-        </div>
-        """)
+        # Teams not named yet — return empty string. The consolidated
+        # match-level pending banner (rendered by the caller, once per
+        # match) handles this state cleanly. Returning a per-team banner
+        # here would duplicate that messaging on both sides of the
+        # matchup, which read as cluttered.
+        return ""
 
     # get_selections_for_game already swaps the record so 'home' = the
     # team we passed as the first argument. So 'side' is always our team.
@@ -4388,7 +4563,7 @@ def render_team_selections_inline(team_name, opponent_name, selections_data, tea
         # No changes for this team — quiet single-line note
         return _h(f"""
         <div class="mc-mt-sel mc-mt-sel-empty">
-          No Changes Made
+          Same XI as last week
         </div>
         """)
 
@@ -5616,7 +5791,7 @@ def _h2h_tornado_row_html(stat_code, stat_label, home_val, away_val,
 
 def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
                      home_watchlist=None, away_watchlist=None,
-                     player_id_lookup=None):
+                     player_id_lookup=None, watchlist_filtered=False):
     """Render the full H2H disclosure block — a deliberately minimal closed
     row that just says HEAD TO HEAD with a chevron, expanding to reveal the
     real content (W-L record banner, last-N meetings strip, season-averages
@@ -5627,8 +5802,18 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
     {stat_code: [(league_rank, player_name, average), ...]} produced by
     build_h2h_watchlist(). `player_id_lookup` is a dict mapping normalised
     player names to AFL Fantasy player IDs, used to construct headshot
-    image URLs. All three default to None so the function stays
-    backwards-compatible with callers that don't have those pieces."""
+    image URLs.
+
+    `watchlist_filtered` indicates whether this week's selections actually
+    changed the displayed top-3 from the pure season-average ranking. When
+    True, the sub-header changes from "season averages" to "adjusted for
+    this week's ins/outs" — communicating to the punter that the panel
+    reflects current reality and is observable: if filtering should have
+    happened but the header doesn't say so, we have a name-matching bug
+    to investigate.
+
+    All optional kwargs default safely so callers that don't have those
+    pieces don't need to be updated."""
     home_c = canonical(home)
     away_c = canonical(away)
 
@@ -6031,8 +6216,15 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
             f'  </div>'
             f'  <div class="mc-h2h-watch-head">'
             f'    <div class="mc-h2h-watch-title">Ones to Watch</div>'
-            f"    <div class=\"mc-h2h-watch-sub\">Top {H2H_WATCHLIST_TOP_N} ranked players per team &middot; season averages</div>"
-            f'  </div>'
+            + (
+                f'    <div class="mc-h2h-watch-sub mc-h2h-watch-sub-filtered">'
+                f'<span class="mc-h2h-watch-sub-flag">●</span>'
+                f' Top {H2H_WATCHLIST_TOP_N} &middot; adjusted for this week&rsquo;s ins/outs'
+                f'</div>'
+                if watchlist_filtered else
+                f'    <div class="mc-h2h-watch-sub">Top {H2H_WATCHLIST_TOP_N} ranked players per team &middot; season averages</div>'
+            )
+            + f'  </div>'
             f'  {teams_header}'
             f'  <div class="mc-h2h-w-stats">{"".join(stat_rows)}</div>'
             f'</div>'
@@ -6370,11 +6562,34 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
         _away_outs = (_sel_record or {}).get("away", {}).get("outs", []) if _sel_record else []
         home_watchlist = filter_watchlist_for_selections(home_watchlist_ext, _home_outs)
         away_watchlist = filter_watchlist_for_selections(away_watchlist_ext, _away_outs)
+
+        # ── Filter visibility flag ──
+        # Did the selections filter actually change the displayed top-3
+        # for either team? If yes, we'll tell the punter by adjusting the
+        # watchlist sub-header to "adjusted for this week's lists" — that
+        # way they know the panel reflects this week's reality and isn't
+        # just stale season-average data. This also makes the feature
+        # observable: if we expect filtering and the header still says
+        # "season averages", something's broken with name matching.
+        def _watchlist_top3_names(wl):
+            names = []
+            for stat_code in wl:
+                for entry in wl[stat_code][:H2H_WATCHLIST_TOP_N]:
+                    names.append(entry[1])  # entry = (rank, name, avg)
+            return tuple(names)
+        _ext_home_truncated = {k: v[:H2H_WATCHLIST_TOP_N] for k, v in home_watchlist_ext.items()}
+        _ext_away_truncated = {k: v[:H2H_WATCHLIST_TOP_N] for k, v in away_watchlist_ext.items()}
+        _filter_changed = (
+            _watchlist_top3_names(_ext_home_truncated) != _watchlist_top3_names(home_watchlist)
+            or _watchlist_top3_names(_ext_away_truncated) != _watchlist_top3_names(away_watchlist)
+        )
+
         h2h_block_html = render_h2h_block(
             home, away, h2h_rankings, h2h_meetings_for_game,
             _h2h_rankings_status,
             home_watchlist, away_watchlist,
             h2h_player_id_lookup,
+            watchlist_filtered=_filter_changed,
         )
 
         st.markdown(_h(f"""
@@ -6413,6 +6628,7 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
               {render_team_selections_inline(away, home, selections_data, away_bg, dp)}
             </div>
           </div>
+          {render_match_pending_banner(dp, game['id']) if _sel_record is None else ''}
           {h2h_block_html}
           <div class="mc-tip">
             <div class="mc-tip-lbl">Our Prediction</div>
@@ -6457,6 +6673,81 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
           </div>
         </div>
         """), unsafe_allow_html=True)
+
+    # ── Live countdown ticker for pending match banners ──
+    # After all match cards have rendered, inject ONE JS block that finds
+    # every .mc-pending-cd element on the page and starts a 1-second
+    # interval updating their countdown text. Streamlit can't auto-rerun
+    # every second, but JS in the iframe can update the parent DOM live.
+    components.html(
+        """
+        <script>
+        (function(){
+            const findCds = () => {
+                try {
+                    return window.parent.document.querySelectorAll('.mc-pending-cd');
+                } catch(e) { return []; }
+            };
+
+            // Format a millisecond delta into a punter-friendly countdown.
+            // Adaptive: days+hours when far away, narrowing down to just
+            // seconds at the wire. Never shows negative values — at zero
+            // we flip to the "ready" state instead.
+            const fmt = (ms) => {
+                if (ms <= 0) return null;
+                const s = Math.floor(ms / 1000);
+                const d = Math.floor(s / 86400);
+                const h = Math.floor((s % 86400) / 3600);
+                const m = Math.floor((s % 3600) / 60);
+                const ss = s % 60;
+                if (d > 0)  return d + 'd ' + h + 'h ' + m + 'm';
+                if (h > 0)  return h + 'h ' + m + 'm ' + String(ss).padStart(2, '0') + 's';
+                if (m > 0)  return m + 'm ' + String(ss).padStart(2, '0') + 's';
+                return ss + 's';
+            };
+
+            let tries = 0;
+            const start = () => {
+                const cds = findCds();
+                if (cds.length === 0 && tries < 40) {
+                    tries += 1;
+                    setTimeout(start, 50);
+                    return;
+                }
+                if (cds.length === 0) return;
+
+                const tick = () => {
+                    const now = Date.now();
+                    cds.forEach(el => {
+                        const iso = el.getAttribute('data-release');
+                        if (!iso) return;
+                        const release = new Date(iso).getTime();
+                        const delta = release - now;
+                        const text = fmt(delta);
+                        if (text === null) {
+                            // Countdown expired — flip the banner to "ready"
+                            el.textContent = 'LISTS OUT';
+                            el.classList.add('ready');
+                            // Also flip parent banner styling
+                            const banner = el.closest('.mc-pending-banner');
+                            if (banner) banner.classList.add('ready');
+                            // Update the small "DROPS IN" label to "REFRESH"
+                            const lbl = banner ? banner.querySelector('.mc-pending-cd-lbl') : null;
+                            if (lbl) lbl.textContent = 'REFRESH PAGE';
+                        } else {
+                            el.textContent = text;
+                        }
+                    });
+                };
+                tick();  // immediate first render
+                setInterval(tick, 1000);
+            };
+            setTimeout(start, 50);
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 # ════════════════════════════════════════════════════════════════════════════
 # RENDER: HIGHLIGHTS (best/worst/tightest)
@@ -10558,72 +10849,6 @@ st.markdown("""
     text-transform:uppercase;
     line-height:1;
 }
-/* ── Live indicator in the eyebrow row ──
-   Pulsing green dot + "TRACKING LIVE" label, right-aligned. Same visual
-   idiom as the bottom status bar's FEED LIVE indicator — signals the
-   chart is monitoring active data rather than a static snapshot. */
-.perf-quad-eyebrow-live{
-    margin-left:auto;
-    display:inline-flex;
-    align-items:center;
-    gap:5px;
-    font-family:var(--mono);
-}
-.perf-quad-eyebrow-live-dot{
-    width:6px;
-    height:6px;
-    border-radius:50%;
-    background:#22d39e;
-    box-shadow:0 0 6px rgba(52,211,153,0.7);
-    animation:perf-quad-live-pulse 1.6s ease-in-out infinite;
-}
-.perf-quad-eyebrow-live-lbl{
-    font-size:0.42rem;
-    font-weight:800;
-    letter-spacing:0.18em;
-    color:rgba(52,211,153,0.9);
-    text-transform:uppercase;
-}
-@keyframes perf-quad-live-pulse{
-    0%, 100% {opacity:1; transform:scale(1);}
-    50%      {opacity:0.4; transform:scale(0.85);}
-}
-/* ── Radar sweep bar at top of chart wrap ──
-   Thin green line traces left to right and resets — the visual idiom
-   of "monitoring in progress." Sits absolutely at the top, doesn't
-   take any layout space. Slow enough (~4s cycle) to feel ambient
-   rather than fidgety. */
-.perf-quad-sweep{
-    position:absolute;
-    top:0; left:0; right:0;
-    height:1px;
-    overflow:hidden;
-    pointer-events:none;
-    z-index:1;
-}
-.perf-quad-sweep::after{
-    content:'';
-    position:absolute;
-    top:0; left:-30%;
-    width:30%; height:100%;
-    background:linear-gradient(90deg,
-        transparent 0%,
-        rgba(52,211,153,0.85) 50%,
-        transparent 100%);
-    animation:perf-quad-sweep-move 4.5s linear infinite;
-}
-@keyframes perf-quad-sweep-move{
-    0%   {left:-30%;}
-    100% {left:100%;}
-}
-@media (prefers-reduced-motion: reduce){
-    .perf-quad-other{opacity:1; animation:none;}
-    .perf-quad-ours-coord{stroke-dashoffset:0; opacity:1; animation:none;}
-    .perf-quad-ours-coord-tick{opacity:1; animation:none;}
-    .perf-quad-sweep::after{animation:none; display:none;}
-    .perf-quad-eyebrow-live-dot{animation:none;}
-}
-
 /* SVG-level styling. All graphical elements rendered server-side; CSS
    handles colours and stroke widths so theme tweaks live in one place. */
 .perf-quad{
@@ -10640,11 +10865,6 @@ st.markdown("""
 }
 .perf-quad-elite{
     fill:rgba(52,211,153,0.045);
-    pointer-events:none;
-}
-.perf-quad-grid{
-    stroke:rgba(255,255,255,0.04);
-    stroke-width:0.6;
     pointer-events:none;
 }
 .perf-quad-median{
@@ -10668,53 +10888,13 @@ st.markdown("""
     fill:rgba(160,170,185,0.28);
 }
 /* Industry models — quiet grey dots, no labels. We never expose source
-   identities; they're a generic benchmark cloud. Each dot fades in with
-   a slight delay (--i custom property set inline by the renderer) for a
-   "data populating" feel on first reveal. */
+   identities; they're a generic benchmark cloud. Rendered static (no
+   stagger animation) so the chart appears immediately complete and the
+   user can read positions without waiting for fade-ins to finish. */
 .perf-quad-other{
     fill:rgba(180,190,210,0.32);
     stroke:rgba(180,190,210,0.55);
     stroke-width:0.8;
-    /* Each dot animates: fade in + slight scale punch on entry */
-    opacity:0;
-    transform-origin:center;
-    transform-box:fill-box;
-    animation:perf-quad-dot-in 0.55s cubic-bezier(0.34,1.56,0.64,1) both;
-    /* Stagger by index: dot 0 starts at 0.1s, dot 1 at 0.13s, etc. */
-    animation-delay:calc(0.1s + var(--i, 0) * 0.025s);
-}
-@keyframes perf-quad-dot-in{
-    0%   {opacity:0; transform:scale(0.3);}
-    70%  {opacity:0.55;}
-    100% {opacity:1; transform:scale(1);}
-}
-/* ── Coordinate readout lines from OURS to the axes ──
-   Thin dashed lines that drop from the OURS dot to both axes, with
-   small dots at the axis terminations. Punter can read off exact
-   coordinates without squinting at where the dot sits relative to
-   the gridlines. */
-.perf-quad-ours-coord{
-    stroke:rgba(52,211,153,0.45);
-    stroke-width:0.8;
-    stroke-dasharray:2 2;
-    pointer-events:none;
-    /* Draws in after the OURS dot appears */
-    stroke-dashoffset:60;
-    animation:perf-quad-coord-draw 0.7s ease-out 1.2s both;
-}
-@keyframes perf-quad-coord-draw{
-    0%   {stroke-dashoffset:60; opacity:0;}
-    50%  {opacity:0.55;}
-    100% {stroke-dashoffset:0;  opacity:1;}
-}
-.perf-quad-ours-coord-tick{
-    fill:rgba(52,211,153,0.7);
-    stroke:none;
-    opacity:0;
-    animation:perf-quad-fade-in 0.4s ease-out 1.8s forwards;
-}
-@keyframes perf-quad-fade-in{
-    to {opacity:1;}
 }
 /* Our point — the hero. Halo + ring + filled core for depth. */
 .perf-quad-ours-halo{
@@ -10789,19 +10969,14 @@ st.markdown("""
 .perf-quad-legend-row-quiet{
     opacity:0.7;
 }
-.perf-quad-legend-rank{
-    /* Slightly nudged in from the main rows to read as a sub-row.
-       This is the rank punchline — "you are #N of M" — so colour-pop
-       it with the green accent without going over-the-top. */
+/* ── Combined position row (rank + gap) ──
+   One tight line per axis: "#3 strike · 3 tips off · #2 margin · +0.9 off."
+   Replaces the previous 3-row stack (RANK / STRIKE GAP / MARGIN GAP)
+   which read as a wall of text. */
+.perf-quad-legend-position{
     padding-left:14px;
     gap:6px;
-}
-.perf-quad-legend-rank-lbl{
-    font-size:0.42rem;
-    font-weight:700;
-    letter-spacing:0.18em;
-    color:var(--text3);
-    text-transform:uppercase;
+    flex-wrap:wrap;
 }
 .perf-quad-legend-rank-val{
     color:#22d39e;
@@ -10809,6 +10984,7 @@ st.markdown("""
     font-variant-numeric:tabular-nums;
     letter-spacing:0.04em;
     text-shadow:0 0 4px rgba(52,211,153,0.35);
+    font-size:0.56rem;
 }
 .perf-quad-legend-rank-sub{
     color:var(--text3);
@@ -10816,31 +10992,6 @@ st.markdown("""
     font-size:0.44rem;
     letter-spacing:0.08em;
     text-transform:lowercase;
-}
-/* ── Gap to leader rows ──
-   The story of "how close to elite" — companions to the rank rows.
-   Same indentation, similar prominence, but distinct visual treatment:
-   the gap *value* is white (the punchline number) while the leader-
-   relative label is dim (the context). When OURS IS the leader, the
-   normal "+X tips behind" line is replaced with a small gold badge
-   reading "LEADING THE FIELD" — earned celebration. */
-.perf-quad-legend-gap{
-    padding-left:14px;
-    gap:6px;
-}
-.perf-quad-legend-gap-lbl{
-    font-size:0.42rem;
-    font-weight:700;
-    letter-spacing:0.18em;
-    color:var(--text3);
-    text-transform:uppercase;
-}
-.perf-quad-legend-gap-val{
-    color:var(--white);
-    font-weight:800;
-    font-variant-numeric:tabular-nums;
-    letter-spacing:0.04em;
-    font-size:0.54rem;
 }
 .perf-quad-legend-gap-sub{
     color:var(--text3);
@@ -10850,7 +11001,7 @@ st.markdown("""
     text-transform:lowercase;
 }
 .perf-quad-legend-gap-leading{
-    color:#fbbf24;  /* gold — earned, not arbitrary */
+    color:#fbbf24;
     font-weight:800;
     font-size:0.5rem;
     letter-spacing:0.14em;

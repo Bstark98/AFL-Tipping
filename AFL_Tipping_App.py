@@ -3217,7 +3217,7 @@ def rank_models(games_subset, all_tips, sources):
     # Previously this was top-6 but the smoothing effect of including weaker
     # models was diluting picks; tightening to top-3 gives the consensus more
     # conviction by weighting only the elite few.
-    return [r[0] for r in rows[:2]], weights, rows
+    return [r[0] for r in rows[:6]], weights, rows
 
 
 def compute_model_quadrant_stats(games_subset, all_tips, sources, tracker=None,

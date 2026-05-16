@@ -2235,8 +2235,12 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 .mc-h2h-w-team-cell{
   font-size:0.74rem; font-weight:800;
   letter-spacing:0.16em;
+  /* The ONLY team colour kept in the panel — and only on the text of
+     the column header, never as a fill or glow. It's wayfinding: tells
+     the eye instantly which column belongs to which team. The
+     decorative text-shadow glow was dropped; the colour alone does the
+     functional job. */
   color:var(--team-accent);
-  text-shadow:0 0 10px color-mix(in srgb, var(--team-accent) 55%, transparent);
   text-transform:uppercase;
   line-height:1;
 }
@@ -2317,17 +2321,20 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
    the markup. */
 .mc-h2h-w-side{
   display:flex; flex-direction:column;
-  gap:5px;
-  padding:8px 10px;
-  background:linear-gradient(180deg,
-    color-mix(in srgb, var(--team-accent) 5%, var(--card)) 0%,
-    color-mix(in srgb, var(--team-accent) 2%, var(--card)) 100%);
-  border:1px solid color-mix(in srgb, var(--team-accent) 20%, var(--border2));
-  border-radius:6px;
-  /* min-height grew with the bigger headshots — 3 rows × ~42px + gaps
-     + padding ≈ 155px. We set it slightly lower so single-row cases
-     don't artificially balloon, but high enough that the matchup chip
-     in the centre doesn't shrink visually below the two flanking sides. */
+  gap:0;
+  padding:6px 0;
+  /* No border, no team-tinted background — these were adding heavy
+     framing that fought the dots, headshots, and matchup chip. Team
+     identity is already conveyed by the column header (BRL/GEE), the
+     headshot ring colour, and the team's accent in rank chips/avg
+     values. Adding a big coloured rectangle on top was visual
+     redundancy that made the panel feel cluttered.
+
+     Rows now separate via subtle hairline dividers (handled per-row
+     below) rather than container framing — quieter, more prestige. */
+  background:transparent;
+  border:none;
+  border-radius:0;
   min-height:140px;
   justify-content:center;
 }
@@ -2360,8 +2367,8 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 .mc-h2h-w-vs{
   display:flex; flex-direction:column;
   align-items:center; justify-content:center;
-  gap:4px;
-  padding:6px 4px;
+  gap:3px;
+  padding:8px 6px;
   /* Matches the new .mc-h2h-w-side min-height (140px) so the chip
      stays vertically centred against the taller side blocks. */
   min-height:140px;
@@ -2398,21 +2405,45 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   border:1px solid rgba(251,191,36,0.25);
 }
 
-/* Winner states — the real money shot of the redesign */
+/* Winner states — the leader chip */
 .mc-h2h-w-vs-h,
 .mc-h2h-w-vs-a{
-  background:linear-gradient(180deg,
-    transparent,
-    color-mix(in srgb, var(--vs-accent) 8%, transparent),
-    transparent);
+  /* Subtle "trophy" treatment: small bordered card with the winning
+     team's accent colour as a soft glow halo. The whole chip reads as
+     a single unit rather than three floating elements. */
+  background:radial-gradient(circle at 50% 35%,
+    color-mix(in srgb, var(--vs-accent) 12%, transparent) 0%,
+    color-mix(in srgb, var(--vs-accent) 4%, transparent) 60%,
+    transparent 100%);
+}
+.mc-h2h-w-vs-eyebrow{
+  font-family:var(--mono);
+  font-size:0.4rem;
+  font-weight:700;
+  letter-spacing:0.22em;
+  color:var(--text3);
+  text-transform:uppercase;
+  line-height:1;
+  opacity:0.85;
+}
+.mc-h2h-w-vs-team{
+  font-family:var(--mono);
+  font-size:0.78rem;
+  font-weight:800;
+  letter-spacing:0.1em;
+  color:var(--vs-accent);
+  text-shadow:0 0 8px color-mix(in srgb, var(--vs-accent) 55%, transparent);
+  text-transform:uppercase;
+  line-height:1;
+  display:inline-flex;
+  align-items:center;
+  gap:3px;
 }
 .mc-h2h-w-vs-marker{
-  font-size:0.8rem;
+  font-size:0.62rem;
   line-height:1;
   color:var(--vs-accent);
-  text-shadow:0 0 6px color-mix(in srgb, var(--vs-accent) 55%, transparent);
-  /* Subtle "pointing" wiggle to draw the eye to the winning side. Only
-     animates once on mount so it doesn't loop forever and become noise. */
+  opacity:0.65;
   animation:mc-h2h-w-vs-point 0.6s ease-out both;
 }
 .mc-h2h-w-vs-h .mc-h2h-w-vs-marker{
@@ -2420,33 +2451,27 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 }
 @keyframes mc-h2h-w-vs-point{
   0%   {opacity:0; transform:translateX(3px);}
-  100% {opacity:1; transform:translateX(0);}
+  100% {opacity:0.65; transform:translateX(0);}
 }
 @keyframes mc-h2h-w-vs-point-h{
   0%   {opacity:0; transform:translateX(-3px);}
-  100% {opacity:1; transform:translateX(0);}
-}
-.mc-h2h-w-vs-team{
-  font-size:0.6rem; font-weight:800;
-  letter-spacing:0.12em;
-  color:var(--vs-accent);
-  text-shadow:0 0 6px color-mix(in srgb, var(--vs-accent) 45%, transparent);
-  text-transform:uppercase;
-  line-height:1;
+  100% {opacity:0.65; transform:translateX(0);}
 }
 .mc-h2h-w-vs-gap{
-  font-size:0.62rem; font-weight:800;
+  font-family:var(--mono);
+  font-size:0.62rem;
+  font-weight:800;
   font-variant-numeric:tabular-nums;
   color:var(--white);
   line-height:1;
   letter-spacing:-0.01em;
-  padding:2px 7px;
+  padding:3px 8px;
   border-radius:3px;
-  background:color-mix(in srgb, var(--vs-accent) 14%, transparent);
-  border:1px solid color-mix(in srgb, var(--vs-accent) 32%, transparent);
+  background:color-mix(in srgb, var(--vs-accent) 16%, transparent);
+  border:1px solid color-mix(in srgb, var(--vs-accent) 38%, transparent);
 }
 @media (prefers-reduced-motion: reduce){
-  .mc-h2h-w-vs-marker{animation:none;}
+  .mc-h2h-w-vs-marker{animation:none; opacity:0.65;}
 }
 
 /* ── TEAM LEADER LIFT ──
@@ -2455,8 +2480,8 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
    name. Independent of data-rank so a team's leader who happens to be
    league #1 stacks both treatments. */
 .mc-h2h-w-row[data-team-leader="1"] .mc-h2h-w-avg{
-  background:color-mix(in srgb, var(--team-accent) 18%, transparent);
-  border-color:color-mix(in srgb, var(--team-accent) 42%, transparent);
+  background:rgba(255,255,255,0.08);
+  border-color:rgba(255,255,255,0.16);
 }
 .mc-h2h-w-row[data-team-leader="1"] .mc-h2h-w-name{
   font-weight:700;
@@ -2475,22 +2500,57 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
      4-column grid which couldn't survive phone-width truncation. */
   grid-template-columns:40px 1fr;
   align-items:center;
-  gap:10px;
-  padding:4px 0;
-  min-height:42px;
+  gap:12px;
+  padding:8px 8px 8px 10px;
+  min-height:50px;
+  position:relative;
   /* Touch interaction prep: cursor + transition for the :active state
      so taps on phone feel acknowledged. The row itself is the touch
      target — bigger than the headshot alone, so a sloppy thumb tap
      anywhere in the row's bounds gets feedback. */
   cursor:default;
-  -webkit-tap-highlight-color:transparent; /* kill the default iOS tap glow; we paint our own */
+  -webkit-tap-highlight-color:transparent;
   transition:
     transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1),
     background-color 0.18s ease;
-  border-radius:6px;
-  /* Make the whole row hit-friendly on phone — using a transparent bg
-     gives :active state somewhere visible to land. */
+  border-radius:4px;
   background:transparent;
+}
+/* Subtle hairline between rows — replaces the heavy bordered side
+   container with quieter intra-row separation. :not(:last-child) so
+   the last row in each side doesn't get a trailing line. */
+.mc-h2h-w-row:not(:last-child)::after{
+  content:'';
+  position:absolute;
+  left:10px; right:8px; bottom:0;
+  height:1px;
+  background:linear-gradient(90deg,
+    rgba(255,255,255,0.04) 0%,
+    rgba(255,255,255,0.08) 50%,
+    rgba(255,255,255,0.0) 100%);
+}
+/* Left-edge stripe — shown ONLY for league medal-tier players (top 3
+   for the stat). It communicates RANK, not team, so it survives the
+   no-team-colour pass. Ordinary rows (rank 4+) get no stripe at all —
+   a neutral line would just be decoration with nothing to say. */
+.mc-h2h-w-row[data-rank="1"]::before,
+.mc-h2h-w-row[data-rank="2"]::before,
+.mc-h2h-w-row[data-rank="3"]::before{
+  content:'';
+  position:absolute;
+  left:0; top:7px; bottom:7px;
+  width:2.5px;
+  border-radius:0 2px 2px 0;
+}
+.mc-h2h-w-row[data-rank="1"]::before{
+  background:linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+  box-shadow:0 0 6px rgba(251,191,36,0.45);
+}
+.mc-h2h-w-row[data-rank="2"]::before{
+  background:linear-gradient(180deg, #d4dae0 0%, #94a3b8 100%);
+}
+.mc-h2h-w-row[data-rank="3"]::before{
+  background:linear-gradient(180deg, #d49060 0%, #92400e 100%);
 }
 /* Text block inside the row — holds rank+name and avg.
    On desktop: horizontal flex (name fills available width, avg pinned right).
@@ -2501,12 +2561,12 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   gap:8px;
   min-width:0;
 }
-/* The rank prefix shown inline before the name. Stays in team accent
-   colour at normal rank, gets the medal-tier colour for league top-3
-   (rules below). Tabular-num so #5 and #15 align cleanly when stacked. */
+/* The rank prefix shown inline before the name. Neutral grey for
+   ordinary rows; medal-tier colour (gold/silver/bronze) for league
+   top-3 — those colours encode RANK, not team, so they're kept.
+   Tabular-num so #5 and #15 align cleanly when stacked. */
 .mc-h2h-w-rank-inline{
-  color:var(--team-accent);
-  opacity:0.72;
+  color:rgba(160,170,185,0.7);
   font-weight:700;
   font-variant-numeric:tabular-nums;
   letter-spacing:-0.01em;
@@ -2548,14 +2608,17 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   width:40px; height:40px;
   flex-shrink:0;
   border-radius:50%;
+  /* Neutral dark disc — no team tint. The player's actual photo is the
+     thing the eye should land on; a coloured ring around it just added
+     noise. A subtle near-black radial keeps the disc reading as a
+     deliberate object (not a hole) without claiming a team identity. */
   background:radial-gradient(circle at 50% 35%,
-    color-mix(in srgb, var(--team-accent) 28%, transparent) 0%,
-    color-mix(in srgb, var(--team-accent) 14%, transparent) 55%,
-    color-mix(in srgb, var(--team-accent) 8%, transparent) 100%);
-  border:1.5px solid color-mix(in srgb, var(--team-accent) 38%, transparent);
+    rgba(255,255,255,0.05) 0%,
+    rgba(255,255,255,0.02) 55%,
+    rgba(255,255,255,0.0) 100%);
+  border:1px solid rgba(255,255,255,0.08);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.07),
-    0 0 12px color-mix(in srgb, var(--team-accent) 22%, transparent);
+    inset 0 1px 0 rgba(255,255,255,0.05);
   overflow:hidden;
   /* The disc itself doesn't need a transition — only the image fade-in does */
 }
@@ -2570,8 +2633,10 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   /* Bumped from 0.54 to 0.72rem to fill the larger 40px disc properly */
   font-size:0.72rem; font-weight:800;
   letter-spacing:0.04em;
-  color:color-mix(in srgb, var(--team-accent) 85%, var(--white));
-  text-shadow:0 0 5px color-mix(in srgb, var(--team-accent) 50%, transparent);
+  /* Neutral grey-white initials — no team tint. Shows only when a
+     headshot image fails to load, so it's a quiet fallback, not a
+     styled element. */
+  color:rgba(212,218,224,0.7);
   line-height:1;
   user-select:none;
   pointer-events:none;
@@ -2591,8 +2656,12 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   /* Crisp scaling when the browser downscales the 450px CDN image */
   image-rendering:auto;
   /* Soft fade-in so images don't pop into place jarringly when they load.
-     Browser-driven — the img is opaque until loaded, then transitions. */
-  animation:mc-h2h-w-shot-fade 0.45s ease-out both;
+     Staggered by row index (--row-i) so the panel populates top-to-bottom
+     like a live feed assembling itself, rather than every face appearing
+     in the same instant. ~70ms between rows — perceptible as life, not
+     slow enough to feel like a loading delay. */
+  animation:mc-h2h-w-shot-fade 0.5s ease-out both;
+  animation-delay:calc(var(--row-i, 0) * 0.07s);
 }
 /* ── TOUCH & POINTER FEEDBACK ──
    The H2H block is primarily consumed on phones, so the rows need to
@@ -2612,10 +2681,10 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
    with the player, not just an abstract data row. Subtle though — 1.06
    is the right amount, anything more starts feeling toy-like. */
 .mc-h2h-w-row:hover{
-  background:color-mix(in srgb, var(--team-accent) 6%, transparent);
+  background:rgba(255,255,255,0.03);
 }
 .mc-h2h-w-row:active{
-  background:color-mix(in srgb, var(--team-accent) 12%, transparent);
+  background:rgba(255,255,255,0.055);
   transform:scale(0.985);
 }
 .mc-h2h-w-row:active .mc-h2h-w-shot{
@@ -2648,10 +2717,10 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
    than broken. The initials show alone (no img child rendered). */
 .mc-h2h-w-shot-fallback{
   background:radial-gradient(circle at 50% 35%,
-    color-mix(in srgb, var(--team-accent) 18%, transparent) 0%,
-    color-mix(in srgb, var(--team-accent) 8%, transparent) 100%);
+    rgba(255,255,255,0.04) 0%,
+    rgba(255,255,255,0.015) 100%);
   border-style:dashed;
-  border-color:color-mix(in srgb, var(--team-accent) 24%, transparent);
+  border-color:rgba(255,255,255,0.1);
 }
 .mc-h2h-w-shot-fallback .mc-h2h-w-shot-initials{
   opacity:0.85;
@@ -2824,8 +2893,10 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
   letter-spacing:-0.01em;
   padding:2px 6px;
   border-radius:3px;
-  background:color-mix(in srgb, var(--team-accent) 10%, transparent);
-  border:1px solid color-mix(in srgb, var(--team-accent) 22%, transparent);
+  /* Neutral pill — no team tint. The number is the content; a coloured
+     box around it just competed with the headshot for attention. */
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.08);
   flex-shrink:0;
 }
 .mc-h2h-w-empty{
@@ -2904,11 +2975,12 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
     grid-template-columns:1fr 70px 1fr;
     gap:4px;
   }
-  .mc-h2h-w-side{padding:6px 7px; gap:4px; min-height:128px;}
-  .mc-h2h-w-vs{padding:4px 2px; gap:3px; min-height:128px;}
-  .mc-h2h-w-vs-marker{font-size:0.7rem;}
-  .mc-h2h-w-vs-team{font-size:0.52rem; letter-spacing:0.1em;}
-  .mc-h2h-w-vs-gap{font-size:0.54rem; padding:1px 5px;}
+  .mc-h2h-w-side{padding:6px 0; gap:0; min-height:128px;}
+  .mc-h2h-w-vs{padding:6px 2px; gap:3px; min-height:128px;}
+  .mc-h2h-w-vs-eyebrow{font-size:0.34rem; letter-spacing:0.18em;}
+  .mc-h2h-w-vs-team{font-size:0.66rem; letter-spacing:0.08em;}
+  .mc-h2h-w-vs-marker{font-size:0.54rem;}
+  .mc-h2h-w-vs-gap{font-size:0.52rem; padding:2px 6px;}
   .mc-h2h-w-vs-line{height:10px;}
   .mc-h2h-w-vs-glyph{font-size:0.42rem; letter-spacing:0.14em;}
   .mc-h2h-w-vs-level-lbl{font-size:0.4rem; padding:2px 5px; letter-spacing:0.14em;}
@@ -2936,31 +3008,34 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
     width:100%;
   }
   .mc-h2h-w-name{
-    font-size:0.58rem;
+    font-size:0.55rem;
     font-weight:600;
     line-height:1.15;
-    /* Allow ellipsis if a name STILL doesn't fit (long compound names),
-       but with the full row width now available it should be rare. */
+    /* Dimmer on phone — name is secondary info, the average below is
+       the row's punchline. Helps the hierarchy read at-a-glance:
+       label first, big number second. */
+    color:rgba(212,218,224,0.78);
     max-width:100%;
   }
   .mc-h2h-w-avg{
-    /* Avg becomes the row's punchline number on phone — bigger, no
-       background pill (cleaner without the border now that it's the
-       primary visual element on its line). The team-accent shows in
-       text colour instead. */
-    font-size:0.82rem;
-    font-weight:800;
+    /* Avg = the row's punchline number on phone. Bumped substantially
+       to read as the row's headline. A soft neutral glow gives it
+       presence without a team tint. */
+    font-size:1rem;
+    font-weight:900;
     padding:0;
     background:transparent;
     border:none;
     color:var(--white);
-    letter-spacing:-0.02em;
+    letter-spacing:-0.03em;
     line-height:1;
+    text-shadow:0 0 10px rgba(255,255,255,0.12);
   }
   .mc-h2h-w-rank-inline{
     /* Slightly smaller on phone since the avg below already establishes
        the row's visual weight. */
-    font-size:0.85em;
+    font-size:0.78em;
+    font-weight:800;
   }
   /* Headshot stays substantial on phone — taller row means we have room */
   .mc-h2h-w-shot{width:40px; height:40px;}
@@ -3217,7 +3292,7 @@ def rank_models(games_subset, all_tips, sources):
     # Previously this was top-6 but the smoothing effect of including weaker
     # models was diluting picks; tightening to top-3 gives the consensus more
     # conviction by weighting only the elite few.
-    return [r[0] for r in rows[:6]], weights, rows
+    return [r[0] for r in rows[:3]], weights, rows
 
 
 def compute_model_quadrant_stats(games_subset, all_tips, sources, tracker=None,
@@ -6021,7 +6096,8 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
                 f'</span>'
             )
 
-        def _watch_row_html(league_rank, player_name, avg, is_team_leader=False):
+        def _watch_row_html(league_rank, player_name, avg, is_team_leader=False,
+                            row_index=0):
             """Build one player row inside a stat block. `is_team_leader`
             marks the highest-average player on this team for this stat —
             CSS uses it to subtly lift their row above the rest. This is
@@ -6047,7 +6123,8 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
             leader_attr = ' data-team-leader="1"' if is_team_leader else ''
             surname = _player_surname(player_name)
             return (
-                f'<div class="mc-h2h-w-row" data-rank="{rank_attr}"{leader_attr}>'
+                f'<div class="mc-h2h-w-row" data-rank="{rank_attr}"{leader_attr} '
+                f'     style="--row-i:{row_index};">'
                 f'  {_headshot_html(player_name)}'
                 f'  <div class="mc-h2h-w-text">'
                 f'    <span class="mc-h2h-w-name">'
@@ -6082,6 +6159,7 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
                 _watch_row_html(
                     league_rank, name, avg,
                     is_team_leader=(idx == team_leader_idx),
+                    row_index=idx,
                 )
                 for idx, (league_rank, name, avg) in enumerate(players)
             )
@@ -6160,8 +6238,8 @@ def render_h2h_block(home, away, rankings_data, h2h_meetings, status,
             return (
                 f'<div class="mc-h2h-w-vs {side_class}" '
                 f'     style="--vs-accent:{winner_accent};">'
-                f'  <span class="mc-h2h-w-vs-marker">{marker}</span>'
-                f'  <span class="mc-h2h-w-vs-team">{winner_abbr}</span>'
+                f'  <span class="mc-h2h-w-vs-eyebrow">LEADS</span>'
+                f'  <span class="mc-h2h-w-vs-team">{winner_abbr}<span class="mc-h2h-w-vs-marker">{marker}</span></span>'
                 f'  <span class="mc-h2h-w-vs-gap">+{abs(gap):.1f}</span>'
                 f'</div>'
             )
@@ -10693,103 +10771,6 @@ st.markdown("""
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   LIVE-NOW BANNER (Performance tab)
-   Appears ONLY when at least one game is currently in progress. Signals
-   to the user that the data on this page is moving and offers an explicit
-   refresh button so they can pull the latest snapshot. Honest UX: tell
-   the user "stuff is happening, here's the button" rather than
-   auto-polling which interrupts whatever they're reading.
-   ════════════════════════════════════════════════════════════════════════ */
-.perf-live-banner{
-    margin:14px 14px 0;
-    padding:11px 14px;
-    background:linear-gradient(90deg,
-        rgba(52,211,153,0.07) 0%,
-        rgba(52,211,153,0.025) 70%,
-        rgba(5,5,10,0) 100%);
-    border:1px solid rgba(52,211,153,0.28);
-    border-radius:8px;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    flex-wrap:wrap;
-    gap:8px;
-    font-family:var(--mono);
-}
-.perf-live-banner-l{
-    display:flex;
-    align-items:center;
-    gap:8px;
-    flex-wrap:wrap;
-}
-.perf-live-banner-dot{
-    width:8px;
-    height:8px;
-    border-radius:50%;
-    background:#22d39e;
-    box-shadow:0 0 8px rgba(52,211,153,0.7);
-    animation:perf-live-banner-pulse 1.4s ease-in-out infinite;
-    flex-shrink:0;
-}
-@keyframes perf-live-banner-pulse{
-    0%, 100% {opacity:1; transform:scale(1);}
-    50%      {opacity:0.45; transform:scale(0.85);}
-}
-.perf-live-banner-lbl{
-    font-size:0.6rem;
-    font-weight:800;
-    letter-spacing:0.14em;
-    color:var(--white);
-    text-transform:uppercase;
-}
-.perf-live-banner-sub{
-    font-size:0.5rem;
-    font-weight:600;
-    letter-spacing:0.08em;
-    color:var(--text2);
-    text-transform:uppercase;
-}
-/* Restyle Streamlit's form submit button inside the live banner section.
-   Targets the form by key prefix — Streamlit renders form_submit_buttons
-   inside a div with [data-testid] of "stFormSubmitButton". We can scope
-   to descendants of an element that follows a perf-live-banner sibling. */
-.perf-live-banner + div [data-testid="stFormSubmitButton"] button,
-.perf-live-banner ~ div [data-testid="stFormSubmitButton"] button{
-    background:rgba(52,211,153,0.12) !important;
-    border:1px solid rgba(52,211,153,0.45) !important;
-    color:#22d39e !important;
-    font-family:var(--mono) !important;
-    font-size:0.6rem !important;
-    font-weight:800 !important;
-    letter-spacing:0.14em !important;
-    text-transform:uppercase !important;
-    padding:7px 14px !important;
-    border-radius:6px !important;
-    min-height:0 !important;
-    line-height:1 !important;
-    transition:all 0.18s ease !important;
-}
-.perf-live-banner + div [data-testid="stFormSubmitButton"] button:hover,
-.perf-live-banner ~ div [data-testid="stFormSubmitButton"] button:hover{
-    background:rgba(52,211,153,0.22) !important;
-    border-color:rgba(52,211,153,0.7) !important;
-    box-shadow:0 0 12px rgba(52,211,153,0.3) !important;
-}
-.perf-live-banner + div [data-testid="stFormSubmitButton"] button:active,
-.perf-live-banner ~ div [data-testid="stFormSubmitButton"] button:active{
-    transform:scale(0.97) !important;
-}
-/* Mobile: tighten paddings */
-@media (max-width:520px){
-    .perf-live-banner{
-        margin:12px 12px 0;
-        padding:9px 11px;
-    }
-    .perf-live-banner-lbl{font-size:0.54rem;}
-    .perf-live-banner-sub{display:none;}
-}
-
-/* ════════════════════════════════════════════════════════════════════════
    BENCHMARK QUADRANT CHART
    2D scatter showing our model vs other industry tipping models. The
    single highest-confidence visual on the page — punters can see at a
@@ -12915,54 +12896,6 @@ def main():
         if tracker:
             st.markdown('<div class="perf-scope">', unsafe_allow_html=True)
 
-            # ── Live-now detector ──
-            # Scan all season games for any currently in progress. When live,
-            # we surface a small banner with a refresh button so the user
-            # knows the data is moving and can pull the latest snapshot
-            # whenever a game finishes. This is the honest pattern: tell
-            # the user "stuff is happening, here's the button" rather than
-            # auto-polling which interrupts whatever they're reading.
-            all_year_games = get_all_games(year)
-            live_count = 0
-            for _g in all_year_games:
-                try:
-                    _status, _pct = game_status(_g)
-                    if _status == "live":
-                        live_count += 1
-                except Exception:
-                    continue
-
-            if live_count > 0:
-                # Tappable live banner. The form_submit_button approach gives
-                # a clean refresh hook that busts our short caches (2min TTL)
-                # and reruns the script — by the next render, completed-game
-                # results will have landed in the tracker.
-                _plural = "GAME" if live_count == 1 else "GAMES"
-                refresh_clicked = False
-                with st.form(key="perf_live_refresh_form", clear_on_submit=False):
-                    st.markdown(_h(f"""
-                    <div class="perf-live-banner">
-                      <div class="perf-live-banner-l">
-                        <span class="perf-live-banner-dot"></span>
-                        <span class="perf-live-banner-lbl">{live_count} {_plural} IN PROGRESS</span>
-                        <span class="perf-live-banner-sub">· STATS UPDATE AS RESULTS LAND</span>
-                      </div>
-                    </div>
-                    """), unsafe_allow_html=True)
-                    refresh_clicked = st.form_submit_button(
-                        "↻  PULL LATEST",
-                        use_container_width=False,
-                    )
-                if refresh_clicked:
-                    # Bust the 2-minute caches on the live-data endpoints
-                    # so the rerun grabs fresh games and tips.
-                    get_all_games.clear()
-                    get_all_tips.clear()
-                    get_current_round.clear()
-                    get_games.clear()
-                    get_tips.clear()
-                    st.rerun()
-
             # Quiet header — just the section name, no duplicated stats
             st.markdown(_h(f"""
             <div class="perf-feed perf-feed-clean">
@@ -13166,3 +13099,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

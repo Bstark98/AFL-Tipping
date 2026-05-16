@@ -3445,9 +3445,15 @@ def render_model_quadrant(year, current_round, sources, tracker):
     s_min, s_max = min(strikes), max(strikes)
     m_min, m_max = min(maes), max(maes)
     s_pad = max(2.0, (s_max - s_min) * 0.12)
-    m_pad = max(1.5, (m_max - m_min) * 0.12)
+    # The Y axis needs generous headroom: the best (lowest-MAE) point is
+    # also the OURS marker, which carries a 14px halo + a label. Without
+    # enough top padding the halo clips the chart's top edge and the
+    # label collides with it. We pad the TOP (low MAE) more than the
+    # bottom so the elite point always sits clear of the frame.
+    m_pad_top = max(3.0, (m_max - m_min) * 0.28)
+    m_pad_bot = max(1.5, (m_max - m_min) * 0.12)
     X_MIN, X_MAX = s_min - s_pad, s_max + s_pad
-    Y_MIN, Y_MAX = m_min - m_pad, m_max + m_pad
+    Y_MIN, Y_MAX = m_min - m_pad_bot, m_max + m_pad_top
 
     # Median split lines — sit at the median of each axis so the field
     # divides into top-left/top-right/bottom-left/bottom-right quadrants
@@ -3599,15 +3605,32 @@ def render_model_quadrant(year, current_round, sources, tracker):
         f'<circle class="perf-quad-ours" '
         f'        cx="{our_x:.1f}" cy="{our_y:.1f}" r="5.2"/>'
     )
-    # Label for our point — positioned to avoid axis edges
-    lbl_x = our_x + 11
-    lbl_anchor = 'start'
-    if our_x > W - PAD_R - 50:
-        lbl_x = our_x - 11
+    # Label for our point — placed to clear the 14px halo AND the chart
+    # edges. The halo radius is 14, so the label must sit at least ~18px
+    # from the dot centre or the glow bleeds through the text.
+    HALO_CLEAR = 19
+    near_right = our_x > W - PAD_R - 46
+    near_top   = our_y < PAD_T + 26
+    if near_top:
+        # Dot is high in the chart — drop the label BELOW the dot,
+        # horizontally centred, so it never overlaps the halo or the
+        # top frame.
+        lbl_x = our_x
+        lbl_y = our_y + HALO_CLEAR + 4
+        lbl_anchor = 'middle'
+    elif near_right:
+        # Near the right edge — label sits to the LEFT of the dot.
+        lbl_x = our_x - HALO_CLEAR
+        lbl_y = our_y + 1
         lbl_anchor = 'end'
+    else:
+        # Default — label to the RIGHT of the dot.
+        lbl_x = our_x + HALO_CLEAR
+        lbl_y = our_y + 1
+        lbl_anchor = 'start'
     parts.append(
         f'<text class="perf-quad-ours-lbl" '
-        f'      x="{lbl_x:.1f}" y="{our_y+1:.1f}" '
+        f'      x="{lbl_x:.1f}" y="{lbl_y:.1f}" '
         f'      text-anchor="{lbl_anchor}" dominant-baseline="middle">OURS</text>'
     )
 

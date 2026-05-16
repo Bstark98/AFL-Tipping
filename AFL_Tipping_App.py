@@ -1539,12 +1539,10 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .hlc-v{color:var(--white);font-weight:800;letter-spacing:-0.01em;font-size:0.66rem;}
 
 /* SCORECARD */
-.sc-outer{margin:14px 14px 0;background:var(--card);border:1px solid var(--border2);border-radius:10px;overflow:hidden;position:relative;font-family:var(--mono);}
-.sc-outer::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent),var(--accent2),transparent);}
-.sc-head{padding:10px 14px 9px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--bg2);}
-.sc-title{font-size:0.62rem;font-weight:700;letter-spacing:0.14em;color:var(--white);text-transform:uppercase;display:flex;align-items:center;gap:6px;}
-.sc-title::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--aglow);}
-.sc-hint{font-size:0.54rem;color:var(--text2);letter-spacing:0.04em;}
+.sc-outer{margin:16px 16px 0;background:var(--bg);border:1px solid rgba(255,255,255,0.07);border-radius:8px;overflow:hidden;position:relative;font-family:var(--mono);}
+.sc-head{padding:11px 15px 9px;display:flex;justify-content:space-between;align-items:center;}
+.sc-title{font-size:0.52rem;font-weight:700;letter-spacing:0.18em;color:var(--text2);text-transform:uppercase;display:flex;align-items:center;gap:6px;}
+.sc-hint{font-size:0.46rem;color:var(--text3);letter-spacing:0.04em;}
 .sc-body{padding:12px;overflow-x:auto;display:flex;justify-content:safe center;}
 .sc-table{display:flex;flex-direction:column;gap:3px;min-width:fit-content;}
 .sc-row{display:flex;align-items:center;gap:3px;}
@@ -3288,11 +3286,10 @@ def rank_models(games_subset, all_tips, sources):
             rows.append((model, acc, s["correct"], s["total"]))
             weights[model] = acc
     rows.sort(key=lambda x: (-x[1], -x[2], x[0]))
-    # Top 3 models — concentrated consensus among the most accurate tippers.
-    # Previously this was top-6 but the smoothing effect of including weaker
-    # models was diluting picks; tightening to top-3 gives the consensus more
-    # conviction by weighting only the elite few.
-    return [r[0] for r in rows[:3]], weights, rows
+    # Top 6 models — a broader consensus base. Averaging across six of the
+    # most accurate Squiggle tippers smooths out any single model's quirks
+    # round to round, trading a touch of conviction for steadier picks.
+    return [r[0] for r in rows[:6]], weights, rows
 
 
 def compute_model_quadrant_stats(games_subset, all_tips, sources, tracker=None,
@@ -4569,32 +4566,64 @@ def rhythm_dots_svg(tracker, max_dots=120):
         f'</svg>'
     )
 
-def sparkline_svg(values, width=180, height=22, stroke="#4f8fff"):
+def sparkline_svg(values, width=180, height=22, stroke=None):
+    """Stock-market-style trend chart for the round-by-round hit rate.
+
+    Unlike a plain sparkline, this colour-codes the line by direction
+    (green when the latest round sits above the first, red when below)
+    and draws a faint dashed baseline at the series average — so every
+    round reads as trading above or below "par", the way a market chart
+    shows a stock against its moving average.
+
+    `stroke` is normally left None so the up/down colour is chosen
+    automatically; pass an explicit colour only to override."""
     if not values or len(values) < 2:
         return f'<svg width="{width}" height="{height}"></svg>'
     vmin = min(values)
     vmax = max(values)
     rng = vmax - vmin if vmax > vmin else 1
     step = width / (len(values) - 1)
+
+    # Direction: compare last vs first. Green = trending up, red = down,
+    # neutral grey-blue = flat. This is the at-a-glance market signal.
+    direction = values[-1] - values[0]
+    if stroke is None:
+        if direction > 0.5:
+            stroke = "#34d399"   # green — up
+        elif direction < -0.5:
+            stroke = "#f87171"   # red — down
+        else:
+            stroke = "#8b95a5"   # neutral grey — flat
+
     pts = []
     for i, v in enumerate(values):
         x = i * step
-        y = height - ((v - vmin) / rng) * (height - 4) - 2
-        pts.append(f"{x:.1f},{y:.1f}")
-    polyline = " ".join(pts)
-    area = f"M 0,{height} L {polyline.replace(' ', ' L ')} L {width},{height} Z"
-    last_x, last_y = pts[-1].split(",")
+        y = height - ((v - vmin) / rng) * (height - 5) - 2.5
+        pts.append((x, y))
+    polyline = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = (f"M 0,{height} L "
+            + " L ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+            + f" L {width},{height} Z")
+    last_x, last_y = pts[-1]
+
+    # Baseline at the series average — the "par" line. Faint, dashed.
+    avg = sum(values) / len(values)
+    base_y = height - ((avg - vmin) / rng) * (height - 5) - 2.5
+
     return f"""
     <svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" preserveAspectRatio="none" style="display:block;">
       <defs><linearGradient id="sparkFill" x1="0" x2="0" y1="0" y2="1">
-        <stop offset="0%" stop-color="{stroke}" stop-opacity="0.35"/>
+        <stop offset="0%" stop-color="{stroke}" stop-opacity="0.28"/>
         <stop offset="100%" stop-color="{stroke}" stop-opacity="0"/>
       </linearGradient></defs>
+      <line x1="0" y1="{base_y:.1f}" x2="{width}" y2="{base_y:.1f}"
+            stroke="rgba(255,255,255,0.16)" stroke-width="0.8"
+            stroke-dasharray="2 2.5" />
       <path d="{area}" fill="url(#sparkFill)" />
-      <polyline points="{polyline}" fill="none" stroke="{stroke}" stroke-width="1.4"
+      <polyline points="{polyline}" fill="none" stroke="{stroke}" stroke-width="1.6"
                 stroke-linecap="round" stroke-linejoin="round"
-                style="filter:drop-shadow(0 0 3px {stroke}88);" />
-      <circle cx="{last_x}" cy="{last_y}" r="2.2" fill="{stroke}"
+                style="filter:drop-shadow(0 0 3px {stroke}99);" />
+      <circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="2.4" fill="{stroke}"
               style="filter:drop-shadow(0 0 4px {stroke});" />
     </svg>
     """
@@ -8481,11 +8510,11 @@ st.markdown("""
 .cal-footer{padding:7px 14px;border-top:1px solid var(--border);background:var(--bg2);font-size:0.5rem;color:var(--text2);letter-spacing:0.02em;line-height:1.5;font-style:italic;}
 
 /* FAV vs DOG + DOW SPLIT */
-.split-wrap{margin:14px 14px 0;display:grid;grid-template-columns:1fr;gap:10px;font-family:var(--mono);}
-.split-panel{background:var(--card);border:1px solid var(--border2);border-radius:10px;overflow:hidden;animation:fadeUp 0.45s ease 0.15s both;}
-.split-head{padding:9px 14px 8px;border-bottom:1px solid var(--border);background:var(--bg2);display:flex;align-items:center;gap:7px;}
-.split-dot{width:5px;height:5px;border-radius:50%;}
-.split-title{font-size:0.6rem;font-weight:700;letter-spacing:0.1em;color:var(--white);text-transform:uppercase;}
+.split-wrap{margin:16px 16px 0;display:grid;grid-template-columns:1fr;gap:10px;font-family:var(--mono);}
+.split-panel{background:var(--bg);border:1px solid rgba(255,255,255,0.07);border-radius:8px;overflow:hidden;animation:fadeUp 0.45s ease 0.15s both;}
+.split-head{padding:11px 15px 9px;display:flex;align-items:center;gap:8px;}
+.split-dot{display:none;}
+.split-title{font-size:0.52rem;font-weight:700;letter-spacing:0.18em;color:var(--text2);text-transform:uppercase;}
 .split-rows{padding:8px 10px;}
 .split-row{display:grid;grid-template-columns:1fr auto 46px;gap:8px;align-items:center;padding:8px 4px;border-bottom:1px dashed rgba(255,255,255,0.04);}
 .split-row:last-child{border-bottom:none;}
@@ -9680,12 +9709,11 @@ st.markdown("""
 .edge-reason{font-size:0.52rem;color:var(--text2);letter-spacing:0.02em;line-height:1.35;margin-top:2px;font-weight:500;}
 
 /* ════════ TRUST BRACKETS ════════ */
-.trust-wrap{margin:14px 14px 0;background:var(--card);border:1px solid var(--border2);border-radius:10px;overflow:hidden;font-family:var(--mono);position:relative;animation:fadeUp 0.45s ease 0.1s both;}
-.trust-wrap::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--green),transparent);}
-.trust-header{padding:10px 14px 9px;border-bottom:1px solid var(--border);background:var(--bg2);display:flex;align-items:center;gap:7px;}
-.trust-header-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--gglow);}
-.trust-header-title{font-size:0.68rem;font-weight:700;color:var(--white);letter-spacing:0.1em;text-transform:uppercase;}
-.trust-header-hint{font-size:0.5rem;color:var(--text2);letter-spacing:0.08em;text-transform:uppercase;margin-left:auto;font-weight:600;}
+.trust-wrap{margin:16px 16px 0;background:var(--bg);border:1px solid rgba(255,255,255,0.07);border-radius:8px;overflow:hidden;font-family:var(--mono);position:relative;animation:fadeUp 0.45s ease 0.1s both;}
+.trust-header{padding:11px 15px 9px;display:flex;align-items:center;gap:8px;}
+.trust-header-dot{display:none;}
+.trust-header-title{font-size:0.52rem;font-weight:700;color:var(--text2);letter-spacing:0.18em;text-transform:uppercase;}
+.trust-header-hint{font-size:0.46rem;color:var(--text3);letter-spacing:0.08em;text-transform:uppercase;margin-left:auto;font-weight:600;}
 .trust-rows{padding:10px;display:flex;flex-direction:column;gap:7px;}
 .trust-row{display:grid;grid-template-columns:1fr 1.3fr auto;gap:12px;align-items:center;padding:10px 11px;border:1px solid;border-radius:8px;}
 .trust-l{min-width:0;}
@@ -9822,10 +9850,10 @@ st.markdown("""
 
 /* ════════ RHYTHM CHART ════════ */
 .rhythm{
-    margin:20px 14px 0;
-    background:var(--card);
-    border:1px solid var(--border2);
-    border-radius:10px;
+    margin:16px 16px 0;
+    background:var(--bg);
+    border:1px solid rgba(255,255,255,0.07);
+    border-radius:8px;
     overflow:hidden;
     font-family:var(--mono);
     animation:fadeUp 0.45s ease 0.25s both;
@@ -9834,31 +9862,28 @@ st.markdown("""
     display:flex;
     justify-content:space-between;
     align-items:center;
-    padding:8px 12px 7px;
-    border-bottom:1px solid var(--border);
-    background:var(--bg2);
+    padding:11px 15px 9px;
 }
 .rhythm-head-l{display:flex;align-items:center;gap:6px;}
-.rhythm-dot{width:5px;height:5px;border-radius:50%;background:var(--accent3);box-shadow:0 0 6px rgba(34,211,238,0.5);}
-.rhythm-title{font-size:0.58rem;font-weight:700;letter-spacing:0.14em;color:var(--white);text-transform:uppercase;}
+.rhythm-dot{display:none;}
+.rhythm-title{font-size:0.52rem;font-weight:700;letter-spacing:0.18em;color:var(--text2);text-transform:uppercase;}
 .rhythm-head-r{display:flex;gap:10px;font-size:0.44rem;color:var(--text2);letter-spacing:0.08em;font-weight:600;text-transform:uppercase;}
 .rhythm-legend-item{display:inline-flex;align-items:center;gap:4px;}
 .rhythm-sw{width:8px;height:8px;border-radius:1.5px;display:inline-block;}
 .rhythm-sw-w{background:#34d399;}
 .rhythm-sw-l{background:#f87171;}
-.rhythm-sw-d{background:#22d3ee;box-shadow:0 0 4px rgba(34,211,238,0.45);}
+.rhythm-sw-d{background:#22d3ee;}
 .rhythm-body{padding:12px;display:flex;justify-content:center;overflow-x:auto;scrollbar-width:none;}
 .rhythm-body::-webkit-scrollbar{display:none;}
 .rhythm-foot{
-    padding:6px 12px;
-    border-top:1px solid var(--border);
-    background:var(--bg2);
+    padding:9px 15px;
+    border-top:1px solid rgba(255,255,255,0.05);
     display:flex;
     justify-content:space-between;
     align-items:center;
     gap:12px;
     font-size:0.44rem;
-    color:var(--text2);
+    color:var(--text3);
     letter-spacing:0.1em;
     font-weight:700;
     text-transform:uppercase;
@@ -9868,54 +9893,28 @@ st.markdown("""
 .rhythm-sw-now{
     background:transparent!important;
     border:1px solid var(--accent3);
-    box-shadow:0 0 6px var(--accent3);
 }
 
-/* LIVE rhythm — adds a tag, stat row, breathing glow on the panel itself */
+/* LIVE rhythm — kept structurally but de-glamorised: no tinted panel,
+   no animated edge-sweep. The "live" idea now reads through the data
+   (the latest-tip glyph in the header), not chrome. */
 .rhythm-live{
-    background:linear-gradient(180deg,rgba(34,211,238,0.025),var(--card));
-    border-color:rgba(34,211,238,0.18)!important;
-}
-.rhythm-live::after{
-    content:'';
-    position:absolute;
-    top:0; left:0; right:0;
-    height:1px;
-    background:linear-gradient(90deg,transparent,var(--accent3),transparent);
-    animation:rhythm-edge-sweep 6s ease-in-out infinite;
+    background:var(--bg);
 }
 .rhythm{position:relative;}
-@keyframes rhythm-edge-sweep{
-    0%, 100% {opacity:0.4;}
-    50%      {opacity:1;}
-}
 .rhythm-live-tag{
     display:inline-flex;
     align-items:center;
     gap:4px;
     padding:1px 6px;
-    background:rgba(34,211,238,0.1);
-    border:1px solid rgba(34,211,238,0.4);
-    color:var(--accent3);
-    font-size:0.42rem;
+    background:rgba(255,255,255,0.04);
+    border:1px solid rgba(255,255,255,0.1);
+    color:var(--text3);
+    font-size:0.4rem;
     font-weight:800;
     letter-spacing:0.18em;
     border-radius:2px;
     margin-left:6px;
-    position:relative;
-    padding-left:11px;
-    text-shadow:0 0 4px rgba(34,211,238,0.4);
-}
-.rhythm-live-tag::before{
-    content:'';
-    position:absolute;
-    left:4px; top:50%;
-    transform:translateY(-50%);
-    width:4px; height:4px;
-    border-radius:50%;
-    background:var(--accent3);
-    box-shadow:0 0 6px var(--accent3);
-    animation:live-blink 1.3s ease-in-out infinite;
 }
 .rhythm-stat{display:inline-flex; align-items:center; gap:4px;}
 .rhythm-stat-k{
@@ -10255,18 +10254,49 @@ st.markdown("""
     display:flex;
     flex-direction:column;
     align-items:flex-end;
-    gap:1px;
-    line-height:1.1;
+    gap:3px;
+    line-height:1;
 }
-.spark-val-num{font-weight:700;}
+.spark-val-num{
+    font-weight:800;
+    font-size:0.72rem;
+    color:var(--white);
+    letter-spacing:-0.01em;
+    font-variant-numeric:tabular-nums;
+}
+/* The round-over-round delta — styled like a market ticker's change
+   badge: tight, coloured, with a faint tinted pill behind it so it
+   reads as a discrete "this is the move" element. */
 .spark-val-delta{
     font-size:0.46rem;
     font-weight:800;
-    letter-spacing:0.08em;
-    text-transform:uppercase;
+    letter-spacing:0.04em;
+    font-variant-numeric:tabular-nums;
+    padding:1.5px 5px;
+    border-radius:3px;
 }
-.spark-val-delta.up{color:var(--green);}
-.spark-val-delta.dn{color:var(--red);}
+.spark-val-delta.up{
+    color:var(--green);
+    background:rgba(52,211,153,0.12);
+}
+.spark-val-delta.dn{
+    color:var(--red);
+    background:rgba(248,113,113,0.12);
+}
+.spark-val-delta.flat{
+    color:var(--text2);
+    background:rgba(255,255,255,0.05);
+}
+/* Quiet round tag — shown instead of a delta when there isn't enough
+   data for a fair round-over-round comparison. */
+.spark-val-tag{
+    font-size:0.42rem;
+    font-weight:700;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    color:var(--text3);
+    font-family:var(--mono);
+}
 
 /* Holographic conic-gradient ring around the hero — drifts very slowly,
    creates a "live data" feel without being distracting */
@@ -10658,116 +10688,123 @@ st.markdown("""
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   PERFORMANCE TAB — ELITE DISCIPLINE
-   Stripped back from earlier versions: no hero card, no numbered chapter
-   headers, no progressing accent colours, no closing ledger row. The data
-   itself is the hero. The framing is barely visible. Bloomberg's rule:
-   the more premium the surface, the less it asks for your attention.
+   PERFORMANCE TAB — BLOOMBERG × APPLE MINIMALISM
+   The framing disappears. Typography and whitespace carry the hierarchy.
+   Colour is surgical — it only appears on real data signals, never as
+   decoration. No glowing boxes, no tinted fills, no accent light-bars.
    ════════════════════════════════════════════════════════════════════════ */
 
-/* Banner variant without the duplicated strike rate. Just announces the
-   tab. Strike rate already lives in the home hero ticker and the bottom
-   status bar — showing it a third time clutters the field. */
-.perf-feed-clean .perf-feed-l{
-    gap:9px;
+/* Masthead — a typographic header, not a banner. */
+.perf-masthead{
+    margin:22px 16px 0;
+    animation:fadeUp 0.5s ease both;
+}
+.perf-masthead-row{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    gap:12px;
+    margin-bottom:9px;
+}
+.perf-masthead-title{
+    font-family:var(--mono);
+    font-size:0.72rem;
+    font-weight:800;
+    letter-spacing:0.2em;
+    text-transform:uppercase;
+    color:var(--white);
+}
+.perf-masthead-meta{
+    font-family:var(--mono);
+    font-size:0.5rem;
+    font-weight:600;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--text3);
+    white-space:nowrap;
+}
+.perf-masthead-rule{
+    height:1px;
+    background:rgba(255,255,255,0.1);
 }
 
-/* Quiet section divider. Replaces the numbered chapter headers with a
-   thin rule + small label. Stops competing with the data below. */
+/* Section divider — label flush left, hairline rule filling the rest of
+   the width. A clean Bloomberg section break: the label names the block,
+   the rule carries the eye across. No glow, no centred double-rule. */
 .perf-div{
-    position:relative;
-    margin:34px 14px 14px;
-    height:11px;
+    margin:38px 16px 16px;
     display:flex;
     align-items:center;
-    justify-content:center;
-}
-.perf-div::before,
-.perf-div::after{
-    content:'';
-    flex:1;
-    height:1px;
-    background:linear-gradient(90deg,
-        transparent,
-        rgba(255,255,255,0.07) 30%,
-        rgba(255,255,255,0.07) 70%,
-        transparent);
+    gap:12px;
 }
 .perf-div-lbl{
     font-family:var(--mono);
     font-size:0.5rem;
     font-weight:700;
     letter-spacing:0.2em;
-    color:var(--text2);
+    color:var(--text3);
     text-transform:uppercase;
-    padding:0 12px;
-    background:transparent;
     white-space:nowrap;
+    flex-shrink:0;
+}
+.perf-div::after{
+    content:'';
+    flex:1;
+    height:1px;
+    background:rgba(255,255,255,0.08);
 }
 
-/* MARGIN PRECISION + CONFIDENCE EDGE — 2-up tight pair. Replaces the
-   old 3-block KPI strip (which led with the duplicated strike rate). */
+/* Stat cards — the number IS the design. No top-accent line, near-zero
+   background, hairline border. Bloomberg cells: quiet frame, loud data. */
 .perf-stat-pair{
-    margin:14px 14px 0;
+    margin:16px 16px 0;
     display:grid;
     grid-template-columns:1fr 1fr;
-    gap:10px;
-}
-.perf-stat-card{
-    padding:14px 14px 12px;
-    background:linear-gradient(180deg,
-        rgba(255,255,255,0.018) 0%,
-        rgba(5,5,10,0.0) 100%);
-    border:1px solid var(--border);
+    gap:1px;
+    background:rgba(255,255,255,0.07);
+    border:1px solid rgba(255,255,255,0.07);
     border-radius:8px;
-    font-family:var(--mono);
-    position:relative;
     overflow:hidden;
 }
-.perf-stat-card::before{
-    /* Faint top accent line — Bloomberg-style cell topper */
-    content:'';
-    position:absolute;
-    top:0; left:14px; right:14px;
-    height:1px;
-    background:linear-gradient(90deg,
-        transparent,
-        rgba(52,211,153,0.4),
-        transparent);
+.perf-stat-card{
+    padding:16px 15px 14px;
+    background:var(--bg);
+    font-family:var(--mono);
+    position:relative;
 }
 .perf-stat-lbl{
-    font-size:0.5rem;
-    font-weight:800;
+    font-size:0.48rem;
+    font-weight:700;
     letter-spacing:0.18em;
-    color:var(--text2);
+    color:var(--text3);
     text-transform:uppercase;
     line-height:1;
-    margin-bottom:9px;
+    margin-bottom:11px;
 }
 .perf-stat-val{
-    font-size:1.85rem;
+    font-size:2rem;
     font-weight:800;
     color:var(--white);
     line-height:1;
-    letter-spacing:-0.035em;
+    letter-spacing:-0.04em;
     font-variant-numeric:tabular-nums;
-    margin-bottom:6px;
+    margin-bottom:8px;
 }
 .perf-stat-unit{
-    font-size:0.65rem;
-    font-weight:700;
-    color:var(--text2);
-    letter-spacing:0.04em;
+    font-size:0.62rem;
+    font-weight:600;
+    color:var(--text3);
+    letter-spacing:0.02em;
     margin-left:3px;
-    vertical-align:0.45em;
+    vertical-align:0.5em;
 }
 .perf-stat-sub{
-    font-size:0.46rem;
+    font-size:0.44rem;
     font-weight:600;
-    letter-spacing:0.08em;
+    letter-spacing:0.07em;
     color:var(--text3);
     text-transform:uppercase;
-    line-height:1.3;
+    line-height:1.35;
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -10777,27 +10814,13 @@ st.markdown("""
    glance where we sit. Top-right is elite (high strike, low MAE).
    ════════════════════════════════════════════════════════════════════════ */
 .perf-quad-wrap{
-    margin:16px 14px 0;
-    padding:16px 14px 14px;
-    background:linear-gradient(180deg,
-        rgba(52,211,153,0.02) 0%,
-        rgba(5,5,10,0.0) 60%);
-    border:1px solid var(--border);
-    border-radius:10px;
+    margin:16px 16px 0;
+    padding:16px 15px 14px;
+    background:var(--bg);
+    border:1px solid rgba(255,255,255,0.07);
+    border-radius:8px;
     position:relative;
     overflow:hidden;
-}
-.perf-quad-wrap::before{
-    /* Top accent edge — same family as the perf-stat-card */
-    content:'';
-    position:absolute;
-    top:0; left:16px; right:16px;
-    height:1px;
-    background:linear-gradient(90deg,
-        transparent,
-        rgba(52,211,153,0.55) 20%,
-        rgba(52,211,153,0.55) 80%,
-        transparent);
 }
 .perf-quad-eyebrow{
     display:flex;
@@ -10807,10 +10830,9 @@ st.markdown("""
     flex-wrap:wrap;
 }
 .perf-quad-eyebrow-glyph{
-    color:var(--green);
-    font-size:0.65rem;
+    color:var(--text3);
+    font-size:0.58rem;
     line-height:1;
-    text-shadow:0 0 6px rgba(52,211,153,0.5);
 }
 .perf-quad-eyebrow-lbl{
     font-family:var(--mono);
@@ -11020,17 +11042,19 @@ st.markdown("""
 
 /* ── MOBILE — Performance tab tightens for phone widths ── */
 @media (max-width:520px){
+    .perf-masthead{margin:18px 12px 0;}
+    .perf-masthead-title{font-size:0.64rem; letter-spacing:0.16em;}
+    .perf-masthead-meta{font-size:0.44rem;}
     .perf-stat-pair{
         margin:12px 12px 0;
-        gap:8px;
     }
-    .perf-stat-card{padding:11px 11px 10px;}
-    .perf-stat-val{font-size:1.55rem;}
-    .perf-stat-unit{font-size:0.55rem;}
-    .perf-stat-lbl{font-size:0.46rem; letter-spacing:0.14em;}
+    .perf-stat-card{padding:13px 12px 11px;}
+    .perf-stat-val{font-size:1.6rem;}
+    .perf-stat-unit{font-size:0.56rem;}
+    .perf-stat-lbl{font-size:0.44rem; letter-spacing:0.14em;}
     .perf-stat-sub{font-size:0.42rem;}
-    .perf-div{margin:24px 12px 10px;}
-    .perf-div-lbl{font-size:0.44rem; padding:0 10px;}
+    .perf-div{margin:28px 12px 12px;}
+    .perf-div-lbl{font-size:0.44rem;}
     .perf-quad-wrap{margin:12px 12px 0; padding:12px 10px 10px;}
     .perf-quad-eyebrow-lbl{font-size:0.6rem;}
     .perf-quad-eyebrow-sub{display:none;}
@@ -11782,7 +11806,10 @@ st.markdown("""
 .perf-scope .intel-grid-wrap::before, .perf-scope .intel-margin-wrap::before,
 .perf-scope .calibration-wrap::before, .perf-scope .split-wrap::before,
 .perf-scope .awards-wrap::before{
-    background:linear-gradient(90deg,transparent,var(--green),transparent);
+    /* No top-accent light-bar inside the Performance tab — the panels
+       carry only their hairline border. Decorative glow lines on every
+       box were the main thing breaking the minimalist discipline. */
+    display:none;
 }
 
 /* ════════ GLOBAL VERTICAL SPACING — BREATHING ROOM ════════ */
@@ -11798,6 +11825,16 @@ st.markdown("""
 .intel-feed, .perf-feed, .calibration-wrap, .split-wrap{
     margin-top:44px!important;
     margin-bottom:14px!important;
+}
+/* Inside the Performance tab every panel sits directly beneath a
+   perf-div section divider, which already carries the section spacing.
+   Override the global 44px so the panel hugs its divider instead of
+   double-spacing — the divider is the section break, not dead air. */
+.perf-scope .hl-wrap, .perf-scope .trust-wrap, .perf-scope .rhythm,
+.perf-scope .calibration-wrap, .perf-scope .split-wrap,
+.perf-scope .sc-outer{
+    margin-top:14px!important;
+    margin-bottom:0!important;
 }
 /* Edge wrap (Round Edge panel) sits high in the tab — give it less */
 .edge-wrap{margin-top:32px!important;}
@@ -12645,29 +12682,47 @@ def main():
     else:
         trend_chip = ''
 
-    # ── Last-round rate display ──
-    # We show "last round rate vs season avg" but ONLY when the latest
-    # round has enough games to be a meaningful comparison. A single
-    # completed tip showing "0% -79 vs avg" is technically correct math
-    # but misleading display — punishes a model for an early-round bad
-    # tip in a sample of 1. Require at least 4 games in the latest round
-    # before showing the delta.
+    # ── Round-trend ticker readout ──
+    # Stock-market style: the latest round's hit rate, plus how it moved
+    # vs the PREVIOUS round (the round-over-round "tick"). Colour-coded
+    # green/red with a triangle, like a share price. We only show the
+    # delta when the latest round has enough games (>=4) to be a fair
+    # comparison — a 1-game round swinging the readout would be noise.
     last_round_games = tracker[-1]["games"] if tracker else []
     latest_round_n = len(last_round_games)
     last_rnd_rate = (sum(1 for g in last_round_games if g["correct"])
                      / latest_round_n * 100) if latest_round_n > 0 else sr
-    rnd_delta = last_rnd_rate - sr
-    if latest_round_n < 4:
-        # Latest round has too few games — just show the season rate
-        # without a delta comparison. We're not hiding the panel, just
-        # not making a bad statistical claim.
-        spark_val_html = f'<div class="hero-t-spark-val">{sr:.0f}%</div>'
-    elif abs(rnd_delta) < 3:
-        spark_val_html = f'<div class="hero-t-spark-val">{last_rnd_rate:.0f}%</div>'
-    elif rnd_delta > 0:
-        spark_val_html = f'<div class="hero-t-spark-val"><span class="spark-val-num">{last_rnd_rate:.0f}%</span><span class="spark-val-delta up">+{rnd_delta:.0f} vs avg</span></div>'
+    # Previous round's rate — the reference for the round-over-round tick
+    prev_rnd_rate = None
+    if len(tracker) >= 2:
+        prev_games = tracker[-2]["games"]
+        if prev_games:
+            prev_rnd_rate = sum(1 for g in prev_games if g["correct"]) / len(prev_games) * 100
+
+    if latest_round_n < 4 or prev_rnd_rate is None:
+        # Not enough to compute a fair round-over-round move — show the
+        # latest rate plainly, clearly labelled, no misleading delta.
+        spark_val_html = (
+            f'<div class="hero-t-spark-val">'
+            f'<span class="spark-val-num">{last_rnd_rate:.0f}%</span>'
+            f'<span class="spark-val-tag">RND {rnd}</span>'
+            f'</div>'
+        )
     else:
-        spark_val_html = f'<div class="hero-t-spark-val"><span class="spark-val-num">{last_rnd_rate:.0f}%</span><span class="spark-val-delta dn">{rnd_delta:.0f} vs avg</span></div>'
+        rnd_move = last_rnd_rate - prev_rnd_rate
+        if rnd_move > 0.5:
+            move_cls, move_arrow = "up", "▲"
+        elif rnd_move < -0.5:
+            move_cls, move_arrow = "dn", "▼"
+        else:
+            move_cls, move_arrow = "flat", "▶"
+        spark_val_html = (
+            f'<div class="hero-t-spark-val">'
+            f'<span class="spark-val-num">{last_rnd_rate:.0f}%</span>'
+            f'<span class="spark-val-delta {move_cls}">'
+            f'{move_arrow} {abs(rnd_move):.0f}pp</span>'
+            f'</div>'
+        )
 
     # Mood class — hero glow shifts with performance
     if sr >= 70:
@@ -12896,16 +12951,17 @@ def main():
         if tracker:
             st.markdown('<div class="perf-scope">', unsafe_allow_html=True)
 
-            # Quiet header — just the section name, no duplicated stats
+            # Bloomberg-style masthead: a typographic header, not a boxed
+            # banner. Small all-caps label left, quiet metadata right, one
+            # hairline rule beneath. No glow, no tinted fill — the framing
+            # disappears so the data is what you see.
             st.markdown(_h(f"""
-            <div class="perf-feed perf-feed-clean">
-              <div class="perf-feed-l">
-                <span class="perf-feed-glyph">◆</span>
-                <span class="perf-feed-lbl">PERFORMANCE LEDGER</span>
+            <div class="perf-masthead">
+              <div class="perf-masthead-row">
+                <span class="perf-masthead-title">Performance Ledger</span>
+                <span class="perf-masthead-meta">{len(tracker)} ROUNDS · YTD</span>
               </div>
-              <div class="perf-feed-r">
-                <span class="perf-feed-meta">{len(tracker)} ROUNDS · YTD</span>
-              </div>
+              <div class="perf-masthead-rule"></div>
             </div>
             """), unsafe_allow_html=True)
 
@@ -13099,4 +13155,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

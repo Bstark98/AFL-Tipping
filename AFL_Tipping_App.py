@@ -12,6 +12,22 @@ from collections import defaultdict
 from zoneinfo import ZoneInfo
 import requests
 
+# Disposal model dependencies (inlined further down). Kept up here with the
+# rest of the imports so they're visible at the top of the file and so a
+# pip-installed environment will fail fast if anything is missing.
+import json
+import math
+import os
+import re
+import sys
+from bs4 import BeautifulSoup
+
+try:
+    from tqdm import tqdm
+    HAVE_TQDM = True
+except ImportError:
+    HAVE_TQDM = False
+
 try:
     import cloudscraper
     _USE_CLOUDSCRAPER = True
@@ -1242,7 +1258,13 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
    that updates every second via JS. Amber-toned to match the punter's
    mental model that this is a "waiting" state. */
 .mc-pending-banner{
-  margin:14px 14px 0;
+  /* Same outer geometry as the H2H + Disposals disclosures so the three
+     panels stack as visual siblings: same horizontal inset (14px each
+     side) and same vertical rhythm (6px above, 4px below).
+     The amber border colour is intentional — this panel carries a
+     "team lists drop in X hours" countdown, so the amber accent
+     communicates urgency. Shape matches H2H, colour signals state. */
+  margin:6px 14px 4px;
   padding:9px 12px;
   display:flex;
   align-items:center;
@@ -1372,7 +1394,21 @@ html{scroll-behavior:smooth;scroll-padding-top:80px;}
 .mc-vs-text{font-family:var(--mono);font-size:0.54rem;font-weight:700;color:var(--text3);letter-spacing:0.14em;}
 .mc-vs-bar{width:1px;height:22px;background:var(--border2);}
 
-.mc-tip{padding:10px 12px 12px;display:flex;flex-direction:column;gap:0;}
+.mc-tip{
+  /* Same outer geometry as the H2H + Disposals disclosures so every
+     panel inside a game card stacks with identical insets and outline
+     widths. The chevron is absent (this panel is the headline, always
+     visible — not a disclosure), but the boxed shape is shared so the
+     eye reads the card as a series of matching panels rather than a
+     mix of bordered and flush blocks. */
+  margin:6px 14px 4px;
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:10px 12px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:0;
+}
 .mc-tip-lbl{font-family:var(--mono);font-size:0.5rem;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--text2);margin-bottom:6px;display:flex;align-items:center;gap:5px;}
 .mc-tip-lbl::before{content:'◆';color:var(--accent);font-size:0.7rem;}
 .mc-tip-chip-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
@@ -3049,6 +3085,5649 @@ div[data-testid="stVerticalBlock"] > div{padding:0!important;}
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# AFL DISPOSAL PROJECTION MODEL (inlined from afl_model.py)
+# ════════════════════════════════════════════════════════════════════════════
+# This entire section is the single-file Negative Binomial disposal pipeline
+# that used to live in a sibling file. Inlined here so the app is a single
+# Streamlit script — no second file to deploy, no import path to worry about.
+#
+# Three name conflicts were resolved at inline time:
+#   BASE     -> FW_BASE      (model's footywire base URL)
+#   HEADERS  -> FW_HEADERS   (footywire-friendly User-Agent block; the app
+#                              already defines a Squiggle-API HEADERS dict)
+#   fetch    -> fw_fetch     (footywire HTTP helper; app's `fetch(p)` hits
+#                              the Squiggle API on a different signature)
+#
+# Everything else — constants, parsers, NB math, ladder/style/pace builders,
+# stage1..stage5, run_pipeline, PipelineOptions — is byte-identical to the
+# standalone afl_model.py and can be diff-compared if needed.
+
+# ==========================================================================
+# SECTION 0  --  CONSTANTS  (shared by every stage)
+# ==========================================================================
+
+FW_BASE = "https://www.footywire.com/afl/footy"
+FIXTURE_URL = f"{FW_BASE}/ft_match_list"
+MATCH_URL = f"{FW_BASE}/ft_match_statistics?mid={{mid}}"
+ADV_URL = f"{FW_BASE}/ft_match_statistics?mid={{mid}}&advv=Y"
+TEAM_SEL_URL = f"{FW_BASE}/afl_team_selections"
+FT_PLAYERS_URL = f"{FW_BASE}/ft_players"
+
+# footywire 403s bare requests; a full browser header set is required.
+FW_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0.0.0 Safari/537.36"),
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/webp,*/*;q=0.8"),
+    "Accept-Language": "en-AU,en;q=0.9",
+    "Referer": FIXTURE_URL,
+}
+
+# the 17 basic stat columns, in table order
+STAT_COLS = ["K", "HB", "D", "M", "G", "B", "T", "HO", "GA",
+             "I50", "CL", "CG", "R50", "FF", "FA", "AF", "SC"]
+
+# the 17 advanced stat columns, in table order
+ADV_COLS = ["CP", "UP", "ED", "DE%", "CM", "GA", "MI5", "1%", "BO",
+            "CCL", "SCL", "SI", "MG", "TO", "ITC", "T5", "TOG%"]
+ADV_FLOAT_COLS = {"DE%", "TOG%"}          # parsed as float, not int
+
+# disposal thresholds the model projects: P(disposals >= X)
+THRESHOLDS = [16, 18, 20, 22, 24, 26, 28, 30, 32, 34]
+
+# Short role labels used in Stage 4 and mid-round grading tables.
+ROLE_ABBR = {
+    "ruck": "ruc", "inside_mid": "imid", "wing_half_back": "wbk",
+    "key_defender": "kdef", "key_forward": "kfwd",
+    "small_forward": "sfwd", "generalist": "gen",
+    "unknown": "?",
+}
+
+# file names this script reads / writes
+CACHE_FILE = "afl_cache.json"
+ROSTER_CACHE_FILE = "afl_roster_cache.json"   # {slug -> team} from ft_players
+PREDICTIONS_DIR = "predictions"     # snapshots of each round's projections
+CACHE_VERSION = 2
+ROSTER_CACHE_TTL_SECONDS = 24 * 3600   # refresh roster page at most daily
+
+# --- model tuning knobs ---------------------------------------------------
+RECENCY_DECAY = 0.92          # older games weighted decay**(games_ago)
+VENUE_SHRINKAGE = 6.0         # pull home/away factor toward 1.0
+OPPONENT_SHRINKAGE = 8.0      # pull opponent factor toward 1.0
+# The backtest showed the model is ~6 points too confident in the top
+# buckets (predicted 95% / actual 89%). Inflating the NB variance
+# fattens the tails and pulls extreme probabilities back toward the
+# observed rate, fixing that overconfidence without touching anywhere
+# else. Tuned against the real-data backtest; do not change without
+# re-running the backtest to confirm.
+VARIANCE_INFLATION = 1.40
+
+# Layer G -- ladder weight: a gentle nudge from ladder position, blended
+# alongside the empirical "disposals conceded" rate and the new
+# pressure-style signals below.
+LADDER_WEIGHT = 0.20
+
+# Layer H -- interstate travel penalty applied to the player's mean.
+# AFL research consistently shows ~3-5% disposal reduction for
+# interstate travel; 0.97 is the conservative end of that range.
+INTERSTATE_TRAVEL_FACTOR = 0.97
+
+# Layer J -- contested-possession share matters for midfielders: a
+# player with CP/D > 0.45 is genuinely contested, and contested-ball
+# winners are LESS volatile (their volume is harder to suppress). We
+# reduce variance for high-CP players via this scale.
+HIGH_CP_VARIANCE_DAMPENING = 0.92
+
+# Layer N -- composite RELIABILITY index. Combines four advanced-stat
+# signals (cp_share + metres/disposal + score involvements/disposal +
+# intercepts/disposal) into a single 0-1 score. Each unit of reliability
+# above zero scales variance toward this floor. A score of 1.0 (a player
+# excellent on all four metrics, e.g. Bontempelli) cuts variance by the
+# full RELIABILITY_VARIANCE_FLOOR amount. Set to 1.0 to DISABLE the
+# adjustment entirely (used for A/B testing the change against the
+# backtest before shipping it).
+#
+# DEFAULT = False after a real-data validation regressed calibration
+# from 0.0072 -> 0.0092 on Round 11 backtest. The synthetic A/B test
+# predicted an improvement, but real AFL data has correlations between
+# the reliability components and base_var that already capture this
+# information; the damping double-counts and slightly over-tightens
+# probability bands. Set to True to opt back in for experimentation.
+USE_RELIABILITY_DAMPING = False
+RELIABILITY_VARIANCE_FLOOR = 0.88   # max variance retention at perfect rel
+
+# Layer K/L -- TEAM STYLE & PRESSURE.
+# Each team's defensive style is captured by a "pressure index" built
+# from the stats that genuinely predict opposition disposal suppression:
+#   T  (tackles)        -- direct pressure acts
+#   1% (one-percenters) -- spoils, smothers, knock-ons
+#   CM (contested marks)-- intercepts won
+#   CP (contested poss) -- the ball is THEIRS, not the opposition's
+# A high-pressure side forces lower opposition disposal counts; a
+# low-pressure side leaks them. The pressure index is z-scored across
+# the league so it's directly comparable. The opponent factor then
+# blends 3 signals:
+#   empirical (disposals conceded ratio)  weighted by EMP_WEIGHT
+#   ladder position                       weighted by LADDER_WEIGHT
+#   pressure index                        weighted by PRESSURE_WEIGHT
+# These three must sum to 1.0.
+PRESSURE_WEIGHT = 0.30
+EMP_WEIGHT = 1.0 - LADDER_WEIGHT - PRESSURE_WEIGHT
+
+# Layer M -- PACE.
+# A high-tempo team plays more possessions overall: when you face them
+# the total disposal pool inflates. We measure pace from total team
+# disposals per game (averaged) and convert to a small multiplier.
+# Bounded so the factor stays in [0.95, 1.05]: pace can nudge, never
+# dominate the model.
+PACE_FACTOR_SCALE = 0.05
+
+# Venue -> state. Used to detect interstate travel.
+# A team based in state X playing a game in state Y means an interstate
+# trip for the team based in X (unless they ARE the away travelling
+# in their own state for a relocated game, which is rare).
+VENUE_STATE = {
+    # Victoria
+    "mcg": "VIC", "marvel stadium": "VIC", "gmhba stadium": "VIC",
+    "kardinia park": "VIC",
+    # New South Wales
+    "scg": "NSW", "sydney showground": "NSW", "engie stadium": "NSW",
+    "spotless stadium": "NSW",
+    # Queensland
+    "gabba": "QLD", "the gabba": "QLD", "people first stadium": "QLD",
+    "metricon stadium": "QLD", "heritage bank stadium": "QLD",
+    "robina": "QLD",
+    # South Australia
+    "adelaide oval": "SA", "barossa park": "SA", "norwood oval": "SA",
+    # Western Australia
+    "optus stadium": "WA",
+    # Tasmania
+    "utas stadium": "TAS", "blundstone arena": "TAS", "ninja stadium": "TAS",
+    "york park": "TAS",
+    # Northern Territory
+    "tio stadium": "NT", "tio traeger park": "NT", "marrara oval": "NT",
+    # ACT
+    "manuka oval": "ACT",
+    # Country / regional
+    "hands oval": "WA",
+}
+
+# Each team's home state -- used to detect interstate travel
+TEAM_HOME_STATE = {
+    "Adelaide": "SA", "Port Adelaide": "SA",
+    "Brisbane": "QLD", "Gold Coast": "QLD",
+    "Carlton": "VIC", "Collingwood": "VIC", "Essendon": "VIC",
+    "Geelong": "VIC", "Hawthorn": "VIC", "Melbourne": "VIC",
+    "North Melbourne": "VIC", "Richmond": "VIC", "St Kilda": "VIC",
+    "Western Bulldogs": "VIC",
+    "Fremantle": "WA", "West Coast": "WA",
+    "GWS": "NSW", "Sydney": "NSW",
+}
+
+
+# --------------------------------------------------------------------------
+# 2026 inter-club trades  (MANUALLY MAINTAINED -- transparency by design)
+# --------------------------------------------------------------------------
+# This is a hand-curated list of players who changed clubs during the
+# October 2025 trade period and now play for a new team in 2026. It
+# exists ONLY to surface a "NEW" tag in Stage 4 so a punter does not
+# second-guess a correct projection (e.g. "wait, why is Luke Parker at
+# North Melbourne?" -- because he was traded there).
+#
+# THIS LIST IS NOT USED FOR MODEL LOGIC. The model itself learns team
+# membership from the scraped per-game data and gets it right without
+# this list. The list is a DISPLAY hint, nothing more.
+#
+# Format: player_name -> (from_club, to_club).
+# If a name on this list does not appear in the projections, no harm
+# done. If a traded player is NOT on this list, the projection still
+# works correctly -- they just won't get the "NEW" tag.
+#
+# To add or remove entries, edit this dict directly. The dict is the
+# entire source of truth for the NEW tag; there is no other logic.
+# Last updated: 2025-10 trade period (verified against AFL.com.au and
+# club news sources at the time of writing).
+TRADES_2026 = {
+    "Karl Amon":            ("Port Adelaide", "Hawthorn"),
+    "Luke Parker":          ("Sydney", "North Melbourne"),
+    "Caleb Daniel":         ("Western Bulldogs", "North Melbourne"),
+    "Jack Steele":          ("St Kilda", "Melbourne"),
+    "Max Heath":            ("St Kilda", "Melbourne"),
+    "Christian Petracca":   ("Melbourne", "Gold Coast"),
+    "Clayton Oliver":       ("Melbourne", "GWS"),
+    "Dan Houston":          ("Port Adelaide", "Collingwood"),
+    "Bailey Smith":         ("Western Bulldogs", "Geelong"),
+    "Tim Kelly":            ("West Coast", "Geelong"),
+    "Tom McCarthy":         ("Geelong", "West Coast"),
+    "John Noble":           ("Collingwood", "Gold Coast"),
+    "Jordan De Goey":       ("Collingwood", "Brisbane"),
+    "Adam Treloar":         ("Western Bulldogs", "Adelaide"),
+    "Tom McDonald":         ("Melbourne", "St Kilda"),
+    "Jake Bowey":           ("Melbourne", "Western Bulldogs"),
+    "Daniel Rioli":         ("Richmond", "Gold Coast"),
+    "Dion Prestia":         ("Richmond", "Geelong"),
+    "Nick Vlastuin":        ("Richmond", "Carlton"),
+    "Jack Graham":          ("Richmond", "West Coast"),
+    "James Trezise":        ("Carlton", "Richmond"),
+}
+
+
+def venue_state(venue_name):
+    """Look up a venue's state, returns None if unrecognised."""
+    if not venue_name:
+        return None
+    key = venue_name.strip().lower()
+    return VENUE_STATE.get(key)
+
+
+def is_interstate(team, venue):
+    """True if `team` is travelling out of state to play at `venue`."""
+    home = TEAM_HOME_STATE.get(team)
+    vstate = venue_state(venue)
+    if not home or not vstate:
+        return False
+    return home != vstate
+CONF_HIGH_GAMES = 8           # games for a "high" confidence flag
+CONF_MED_GAMES = 5
+
+# canonical AFL club names -- every footywire spelling maps through here
+TEAM_CANON = {
+    "adelaide": "Adelaide", "adelaide crows": "Adelaide", "crows": "Adelaide",
+    "brisbane": "Brisbane", "brisbane lions": "Brisbane", "lions": "Brisbane",
+    "carlton": "Carlton", "carlton blues": "Carlton", "blues": "Carlton",
+    "collingwood": "Collingwood", "collingwood magpies": "Collingwood",
+    "magpies": "Collingwood",
+    "essendon": "Essendon", "essendon bombers": "Essendon",
+    "bombers": "Essendon",
+    "fremantle": "Fremantle", "fremantle dockers": "Fremantle",
+    "dockers": "Fremantle",
+    "geelong": "Geelong", "geelong cats": "Geelong", "cats": "Geelong",
+    "gold coast": "Gold Coast", "gold coast suns": "Gold Coast",
+    "suns": "Gold Coast",
+    "gws": "GWS", "gws giants": "GWS", "greater western sydney": "GWS",
+    "greater western sydney giants": "GWS", "giants": "GWS",
+    "hawthorn": "Hawthorn", "hawthorn hawks": "Hawthorn", "hawks": "Hawthorn",
+    "melbourne": "Melbourne", "melbourne demons": "Melbourne",
+    "demons": "Melbourne",
+    "north melbourne": "North Melbourne", "kangaroos": "North Melbourne",
+    "north melbourne kangaroos": "North Melbourne",
+    "port adelaide": "Port Adelaide", "port adelaide power": "Port Adelaide",
+    "power": "Port Adelaide",
+    "richmond": "Richmond", "richmond tigers": "Richmond",
+    "tigers": "Richmond",
+    "st kilda": "St Kilda", "st kilda saints": "St Kilda",
+    "saints": "St Kilda",
+    "sydney": "Sydney", "sydney swans": "Sydney", "swans": "Sydney",
+    "west coast": "West Coast", "west coast eagles": "West Coast",
+    "eagles": "West Coast",
+    "western bulldogs": "Western Bulldogs", "bulldogs": "Western Bulldogs",
+}
+VALID_CLUBS = set(TEAM_CANON.values())
+
+# th-<slug> -> canonical club, for reading the fixture's team links
+SLUG_TO_TEAM = {
+    "adelaide-crows": "Adelaide", "brisbane-lions": "Brisbane",
+    "carlton-blues": "Carlton", "collingwood-magpies": "Collingwood",
+    "essendon-bombers": "Essendon", "fremantle-dockers": "Fremantle",
+    "geelong-cats": "Geelong", "gold-coast-suns": "Gold Coast",
+    "greater-western-sydney-giants": "GWS", "hawthorn-hawks": "Hawthorn",
+    "melbourne-demons": "Melbourne", "kangaroos": "North Melbourne",
+    "north-melbourne-kangaroos": "North Melbourne",
+    "port-adelaide-power": "Port Adelaide", "richmond-tigers": "Richmond",
+    "st-kilda-saints": "St Kilda", "sydney-swans": "Sydney",
+    "west-coast-eagles": "West Coast", "western-bulldogs": "Western Bulldogs",
+}
+
+
+# ==========================================================================
+# SECTION 1  --  SHARED UTILITIES  (logging, HTTP, cache)
+# ==========================================================================
+
+_BAR = None          # active tqdm bar, so log() can print through it safely
+
+
+def log(msg):
+    """Print a line, flushed immediately, safe even while a bar is live."""
+    if _BAR is not None and HAVE_TQDM:
+        _BAR.write(msg)
+    else:
+        print(msg, flush=True)
+
+
+def banner(title):
+    """Print a section banner."""
+    log("")
+    log("=" * 72)
+    log(title)
+    log("=" * 72)
+
+
+def fw_fetch(url, session, label="page", retries=3, pause=1.5):
+    """GET a URL with retries. Returns text, or raises RuntimeError."""
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = session.get(url, headers=FW_HEADERS, timeout=30)
+            if resp.status_code == 200:
+                return resp.text
+            last_err = f"HTTP {resp.status_code}"
+        except requests.RequestException as exc:
+            last_err = str(exc)
+        if attempt < retries:
+            time.sleep(pause * attempt)
+    raise RuntimeError(f"failed to fetch {label} ({url}): {last_err}")
+
+
+def load_cache(path=CACHE_FILE):
+    """Load the on-disk cache dict {str(mid): {...}}. Empty if absent."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            blob = json.load(fh)
+        # the expected shape is {"version": N, "games": {...}}; any
+        # other shape (old format, hand-edited, corrupted) means start
+        # fresh rather than crash.
+        if not isinstance(blob, dict):
+            return {}
+        if blob.get("version") != CACHE_VERSION:
+            return {}
+        games = blob.get("games", {})
+        return games if isinstance(games, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_cache(games, path=CACHE_FILE):
+    """Write the cache dict to disk atomically."""
+    blob = {"version": CACHE_VERSION, "games": games}
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(blob, fh)
+    os.replace(tmp, path)
+
+
+# ==========================================================================
+# SECTION 2  --  PARSING HELPERS  (normalisation, slugs, names, numbers)
+# ==========================================================================
+
+def canon_team(name):
+    """Map any footywire team spelling to one canonical club name."""
+    if not name:
+        return ""
+    key = re.sub(r"\s+", " ", name.strip().lower())
+    if key in TEAM_CANON:
+        return TEAM_CANON[key]
+    parts = key.split()
+    for cut in range(len(parts) - 1, 0, -1):
+        sub = " ".join(parts[:cut])
+        if sub in TEAM_CANON:
+            return TEAM_CANON[sub]
+    return name.strip().title()
+
+
+def slug_to_team(slug):
+    """Map a th-<slug> fixture link fragment to a canonical club name."""
+    slug = slug.lower().strip("/-")
+    if slug in SLUG_TO_TEAM:
+        return SLUG_TO_TEAM[slug]
+    return canon_team(slug.replace("-", " "))
+
+
+def player_slug(cell):
+    """
+    Extract the stable player slug from a table cell's pp- profile link.
+    Handles relative/absolute URLs, query strings, trailing slashes,
+    uppercase, and multi-part surnames. Returns None if no pp- link.
+    """
+    for link in cell.find_all("a"):
+        href = (link.get("href", "") or "").split("?")[0].rstrip("/")
+        m = re.search(r"pp-[a-z0-9-]+?--([a-z0-9][a-z0-9-]*)", href, re.I)
+        if m:
+            return m.group(1).lower()
+    return None
+
+
+def clean_player_name(cell):
+    """Pull the player's display name out of a table cell."""
+    link = cell.find("a")
+    return (link.get_text(strip=True) if link
+            else cell.get_text(strip=True))
+
+
+def norm_name(name):
+    """
+    Normalise a name to a fallback merge key: '<first-initial> <surname>'.
+    'Errol Gulden' and 'E Gulden' both reduce to 'e gulden'. Hyphenated
+    surnames are preserved.
+    """
+    if not name:
+        return ""
+    cleaned = re.sub(r"[^\w\s-]", "", name).strip().lower()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if not cleaned:
+        return ""
+    parts = cleaned.split(" ")
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0][0]} {' '.join(parts[1:])}"
+
+
+def to_number(text, is_float=False):
+    """Parse a stat cell. Blank/dash -> 0. Never raises."""
+    text = (text or "").strip().replace("%", "").replace(",", "")
+    if text in ("", "-"):
+        return 0.0 if is_float else 0
+    try:
+        return float(text) if is_float else int(float(text))
+    except ValueError:
+        return 0.0 if is_float else 0
+
+
+# ==========================================================================
+# SECTION 3  --  FIXTURE & MATCH-PAGE PARSING
+# ==========================================================================
+
+def parse_fixture(html):
+    """
+    Parse the fixture page. Returns (completed, upcoming, n_byes).
+
+    completed : list of {round, date, venue, crowd, mid} for games with
+                a result link.
+    upcoming  : list of {round, date, venue, home, away} for fixtured
+                games not yet played.
+    n_byes    : count of explicit BYE rows.
+
+    Nested 'container' rows that wrap the whole fixture are rejected so
+    a real match row -- short text, exactly one result link -- is never
+    confused with the page-wide wrapper.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    completed, upcoming = [], []
+    n_byes = 0
+    current_round = None
+
+    for tr in soup.find_all("tr"):
+        text = tr.get_text(" ", strip=True)
+
+        rnd = re.match(r"^Round\s+(\d+)$", text)
+        if rnd:
+            current_round = int(rnd.group(1))
+            continue
+        if current_round is None:
+            continue
+        if len(text) > 400:               # container row -- skip
+            continue
+
+        result_links = tr.find_all(
+            "a", href=re.compile(r"ft_match_statistics\?mid=\d+"))
+        if len(result_links) > 1:         # container row -- skip
+            continue
+
+        cells = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+
+        if result_links:
+            # COMPLETED game
+            mid = int(re.search(r"mid=(\d+)",
+                                result_links[0]["href"]).group(1))
+            completed.append({
+                "round": current_round,
+                "date": cells[0] if cells else "",
+                "venue": cells[2] if len(cells) > 2 else "",
+                "crowd": cells[3] if len(cells) > 3 else "",
+                "mid": mid,
+            })
+        elif "BYE" in text.upper() and len(text) < 60:
+            n_byes += 1
+        else:
+            # possible upcoming game: exactly two th- team links
+            team_links = tr.find_all("a", href=re.compile(r"th-"))
+            if len(team_links) != 2:
+                continue
+            slugs = []
+            for a in team_links:
+                m = re.search(r"th-([a-z0-9-]+)", a["href"], re.I)
+                if m:
+                    slugs.append(m.group(1))
+            if len(slugs) != 2:
+                continue
+            upcoming.append({
+                "round": current_round,
+                "date": cells[0] if cells else "",
+                "venue": cells[2] if len(cells) > 2 else "",
+                "home": slug_to_team(slugs[0]),
+                "away": slug_to_team(slugs[1]),
+            })
+
+    # de-dupe completed by mid
+    seen, unique = set(), []
+    for m in completed:
+        if m["mid"] not in seen:
+            seen.add(m["mid"])
+            unique.append(m)
+    return unique, upcoming, n_byes
+
+
+def next_round(upcoming):
+    """Return (round_number, [fixtures]) for the next round to project."""
+    if not upcoming:
+        return None, []
+    target = min(fx["round"] for fx in upcoming)
+    return target, [fx for fx in upcoming if fx["round"] == target]
+
+
+def current_round_completed_games(completed, target_round):
+    """
+    Find completed games in the master that belong to the SAME round
+    we are projecting. These are mid-round games (e.g. Thursday-night
+    matches that played before Saturday-Sunday matches).
+
+    Returns a list of game dicts (from parse_fixture's completed list)
+    filtered to the target round, with their mid values intact so
+    we can look up player actuals by mid.
+    """
+    if not completed or target_round is None:
+        return []
+    return [g for g in completed if g.get("round") == target_round]
+
+
+# ==========================================================================
+#   TEAM-SELECTIONS PAGE  --  parser, fetcher, and slug map
+# ==========================================================================
+# Footywire publishes named lineups (the 18 in-field + 5 interchange,
+# plus emergencies, ins, and outs) at:
+#   https://www.footywire.com/afl/footy/afl_team_selections
+#
+# CRITICAL CAVEATS:
+#   1. The page ONLY shows the LATEST round. There is no historical
+#      archive -- once next round is announced, this round's data is
+#      gone. So we use it only to enrich Stage 4 projections of the
+#      current round; we cannot retro-grade past rounds against it.
+#   2. The page populates by 6:20pm Perth time on Thursday (for the
+#      Thursday-night game) and Friday (for the rest of the round).
+#      Run the script after 6:20pm Friday Perth time for full coverage
+#      of an upcoming weekend round.
+#   3. If the page is for a different round than we expect, we discard
+#      it. If it covers only some games, we apply adjustments only to
+#      those games. We never silently rely on partial data.
+#
+# JOIN KEY: every player link is `pp-{team-slug-prefix}--{player-slug}`.
+# The existing master CSV already strips the team prefix and stores
+# only `{player-slug}` (see player_slug() at the top). So we match on
+# (canonical_team_name, player_slug) -- the exact same compound key
+# used by the merge stage.
+
+
+# Map from the team-slug prefix on the page to our canonical team name.
+# Used to tell which team a player link belongs to.
+TEAM_SLUG_TO_NAME = {
+    "adelaide-crows":               "Adelaide",
+    "brisbane-lions":               "Brisbane",
+    "carlton-blues":                "Carlton",
+    "collingwood-magpies":          "Collingwood",
+    "essendon-bombers":             "Essendon",
+    "fremantle-dockers":            "Fremantle",
+    "geelong-cats":                 "Geelong",
+    "gold-coast-suns":              "Gold Coast",
+    "greater-western-sydney-giants":"GWS",
+    "hawthorn-hawks":               "Hawthorn",
+    "kangaroos":                    "North Melbourne",
+    "melbourne-demons":             "Melbourne",
+    "port-adelaide-power":          "Port Adelaide",
+    "richmond-tigers":              "Richmond",
+    "st-kilda-saints":              "St Kilda",
+    "sydney-swans":                 "Sydney",
+    "west-coast-eagles":            "West Coast",
+    "western-bulldogs":             "Western Bulldogs",
+}
+
+
+def _team_from_pp_href(href):
+    """
+    Given a href like 'pp-hawthorn-hawks--karl-amon', return
+    ('Hawthorn', 'karl-amon'). Returns (None, None) on no match.
+    """
+    if not href:
+        return None, None
+    m = re.search(
+        r"pp-([a-z0-9-]+?)--([a-z0-9][a-z0-9-]*)", href, re.I)
+    if not m:
+        return None, None
+    team_prefix = m.group(1).lower()
+    player = m.group(2).lower()
+    return TEAM_SLUG_TO_NAME.get(team_prefix), player
+
+
+def parse_team_selections(html):
+    """
+    Parse the Footywire team-selections page (raw HTML form).
+
+    Page structure (one game block):
+
+      Hawthorn v Adelaide (UTAS Stadium)
+      <td>                              <-- HOME ins/outs block
+        <table>
+          <b>Interchange</b>  <a href="pp-hawthorn-hawks--..."> ...
+          <b>Emergencies</b>  <a href="pp-hawthorn-hawks--..."> ...
+          <b>Ins</b>          <a href="pp-hawthorn-hawks--..."> ...
+          <b>Outs</b>         <a href="pp-hawthorn-hawks--..."> ...
+        </table>
+      </td>
+      <div class="divseparator">        <-- LINEUP table (named 22)
+        <table>
+          <tr><td>FB</td>   pp-hawthorn-hawks--... pp-hawthorn-hawks--... ...
+          <tr><td>FF</td>   pp-adelaide-crows--... pp-adelaide-crows--... ...
+          ... (interleaved home/away rows)
+        </table>
+      </div>
+      <td>                              <-- AWAY ins/outs block
+        <table>
+          <b>Interchange</b>  <a href="pp-adelaide-crows--..."> ...
+          ...
+        </table>
+      </td>
+
+    Strategy:
+      1. Locate each game heading (team-vs-team validated against the
+         canonical AFL club list, so spurious matches are rejected).
+      2. For each game, extract the ins/outs blocks (each is bounded
+         by `<b>Interchange</b>` and the next `<b>Interchange</b>` or
+         the lineup-table `<div class="divseparator">`).
+      3. Classify each block by the team-slug prefix of its first
+         player link.
+      4. Within a block, walk `<b>Section</b>` headers and the player
+         links that follow each one until the next header.
+      5. Parse the lineup table separately for the named-18.
+
+    Returns:
+      {
+        "round": int or None,
+        "games": [{"home", "away", "venue",
+                   "home_selections", "away_selections"}],
+        "raw_warnings": [str, ...],
+      }
+    """
+    result = {"round": None, "games": [], "raw_warnings": []}
+
+    if not html or "Team Selections" not in html:
+        result["raw_warnings"].append(
+            "page does not look like the team-selections page "
+            "(no 'Team Selections' text found)")
+        return result
+
+    m = re.search(r"Round\s+(\d+)\s+Team\s+Selections", html, re.I)
+    if m:
+        result["round"] = int(m.group(1))
+    else:
+        result["raw_warnings"].append(
+            "could not find 'Round N Team Selections' on page")
+
+    # Build a robust game-heading detector. We require BOTH team names
+    # to canonicalise to real AFL clubs -- this prevents false matches
+    # on stray text like "Team Selections - Hawthorn v Adelaide" or
+    # "Average Attributes - Geelong Attribute Sydney".
+    headings = _find_game_headings(html)
+    if not headings:
+        result["raw_warnings"].append("no recognisable game headings found")
+        return result
+
+    for i, (start, end, home, away, venue) in enumerate(headings):
+        # The game block spans from just after this heading to just
+        # before the next heading (or end of doc).
+        next_start = headings[i + 1][0] if i + 1 < len(headings) else len(html)
+        game_html = html[end:next_start]
+
+        game = {
+            "home": home, "away": away, "venue": venue,
+            "home_selections": _empty_selections(),
+            "away_selections": _empty_selections(),
+        }
+
+        # 1. Parse each ins/outs block (one per team) as a self-
+        # contained unit. The first pp-slug in each block tells us
+        # which team owns it (home vs away).
+        for block in _iter_ins_out_blocks(game_html):
+            team = _team_from_block_first_slug(block)
+            if team is None:
+                continue
+            if team == home:
+                _parse_ins_out_block(block, game["home_selections"])
+            elif team == away:
+                _parse_ins_out_block(block, game["away_selections"])
+            # else: stray block from another club, ignored
+
+        # 2. Parse the lineup table (named-18 + ruck positions).
+        # Classification is by slug prefix (home vs away).
+        _parse_lineup_block(game_html, home, away, game)
+
+        # 3. Roll-up: a player on the interchange or in the Ins list
+        # IS named in the 23. Outs override (a player simultaneously
+        # in "named" by lineup-table presence and in "out" by ins/
+        # outs block is treated as out).
+        for side in ("home_selections", "away_selections"):
+            sel = game[side]
+            sel["named"] = ((sel["named"]
+                             | sel["interchange"]
+                             | sel["in"])
+                            - sel["out"])
+
+        result["games"].append(game)
+
+    # Sanity check: a real Outs list is typically 1-7 players. If we
+    # produced more than 10, the parser leaked -- surface the warning
+    # so the operator notices.
+    for g in result["games"]:
+        for side, team in [("home_selections", g["home"]),
+                            ("away_selections", g["away"])]:
+            sel = g[side]
+            if len(sel["out"]) > 10:
+                result["raw_warnings"].append(
+                    f"{team}: parser found {len(sel['out'])} outs "
+                    f"-- suspicious (real Outs lists are typically <8)")
+
+    return result
+
+
+def _find_game_headings(html):
+    """
+    Find every game-heading position in the page. Returns a list of
+    (start, end, home_canonical, away_canonical, venue) tuples sorted
+    by start position.
+
+    Strategy: scan the whole page for the pattern
+        TEAM v TEAM (VENUE)
+    where both TEAM strings canonicalise to real AFL clubs. We allow
+    team names with internal spaces / apostrophes by using a non-greedy
+    pattern, and validate both via _canonicalise_team_name. Random
+    "Hawthorn Attribute Adelaide" text in the stats blocks won't match
+    because it doesn't have " v " and "(venue)" parts.
+    """
+    pattern = re.compile(
+        r"([A-Z][A-Za-z .'-]{2,30}?)\s+v\s+"
+        r"([A-Z][A-Za-z .'-]{2,30}?)"
+        r"\s+\(([^)]{3,80})\)")
+    headings = []
+    for m in pattern.finditer(html):
+        raw_home = m.group(1).strip()
+        raw_away = m.group(2).strip()
+        venue = m.group(3).strip()
+        # Trim leading garbage like "Team Selections - " by extracting
+        # only the last 1-3 words of raw_home -- canonical AFL team
+        # names are at most 3 words ("Western Bulldogs", "Port Adelaide",
+        # "North Melbourne"). If we can find a canonical match in the
+        # last 1, 2, or 3 words, use it.
+        home = _try_canonicalise_tail(raw_home)
+        away = _canonicalise_team_name(raw_away)
+        if home and away:
+            headings.append((m.start(), m.end(), home, away, venue))
+    return headings
+
+
+def _try_canonicalise_tail(raw):
+    """
+    Try to canonicalise the last 1, 2, or 3 words of `raw` to a team
+    name. Handles cases like "Team Selections - Hawthorn" (where
+    "Hawthorn" is the actual team).
+    """
+    if not raw:
+        return None
+    words = raw.split()
+    # Try longest suffix first (so "North Melbourne" beats "Melbourne").
+    for n in (3, 2, 1):
+        if len(words) >= n:
+            candidate = " ".join(words[-n:])
+            canon = _canonicalise_team_name(candidate)
+            if canon:
+                return canon
+    return None
+
+
+
+
+
+def _empty_selections():
+    return {
+        "named":       set(),
+        "interchange": set(),
+        "emergency":   set(),
+        "in":          set(),
+        "out":         set(),
+    }
+
+
+def _canonicalise_team_name(raw):
+    """
+    Match a raw heading-text team name to our canonical TEAM_HOME_STATE
+    keys. The page uses the same names we do, but normalise whitespace
+    and a few historical variants.
+    """
+    if not raw:
+        return None
+    s = " ".join(raw.split())
+    # direct match
+    if s in TEAM_HOME_STATE:
+        return s
+    # known variants
+    variants = {
+        "GWS Giants": "GWS",
+        "Greater Western Sydney": "GWS",
+        "Kangaroos": "North Melbourne",
+    }
+    if s in variants:
+        return variants[s]
+    return None
+
+
+def _iter_ins_out_blocks(game_html):
+    """
+    Yield each ins/outs block (an HTML substring) in document order.
+
+    A block starts at a `<b>Interchange</b>` marker and ends at the
+    next such marker OR the start of the lineup table
+    (`<div class="divseparator">`). The two block-starts per game
+    correspond to home then away.
+    """
+    inter_starts = [m.start() for m in re.finditer(
+        r"<b>\s*Interchange\s*</b>", game_html, re.I)]
+    if not inter_starts:
+        return
+    div_seps = [m.start() for m in re.finditer(
+        r'<div\s+class="divseparator"', game_html, re.I)]
+
+    for i, s in enumerate(inter_starts):
+        candidates = []
+        if i + 1 < len(inter_starts):
+            candidates.append(inter_starts[i + 1])
+        for d in div_seps:
+            if d > s:
+                candidates.append(d)
+        end = min(candidates) if candidates else len(game_html)
+        yield game_html[s:end]
+
+
+def _team_from_block_first_slug(block):
+    """
+    Determine which team an ins/outs block belongs to, by looking at
+    the team-slug prefix of the FIRST player link in the block.
+    Returns canonical team name or None.
+    """
+    m = re.search(r"\b(pp-[a-z0-9-]+?--[a-z0-9][a-z0-9-]*)\b",
+                  block, re.I)
+    if not m:
+        return None
+    team, _ = _team_from_pp_href(m.group(1))
+    return team
+
+
+def _parse_ins_out_block(block, sel):
+    """
+    Parse a single team's ins/outs block. Each `<b>Interchange</b>`
+    (etc.) sets the current section; pp- links that follow go into
+    that section's set in `sel`.
+
+    Section state is local to this block, so cross-team leakage is
+    impossible by construction.
+    """
+    section_map = {
+        "interchange": "interchange",
+        "emergencies": "emergency",
+        "ins":         "in",
+        "outs":        "out",
+    }
+    tokens = []
+    for m in re.finditer(
+            r"<b>\s*(Interchange|Emergencies|Ins|Outs)\s*</b>",
+            block, re.I):
+        section = section_map[m.group(1).lower()]
+        tokens.append((m.start(), "section", section))
+    for m in re.finditer(
+            r"\b(pp-[a-z0-9-]+?--[a-z0-9][a-z0-9-]*)\b",
+            block, re.I):
+        tokens.append((m.start(), "link", m.group(1)))
+    # At equal position, section sorts before link.
+    tokens.sort(key=lambda t: (t[0], 0 if t[1] == "section" else 1))
+
+    current = None
+    for _pos, kind, data in tokens:
+        if kind == "section":
+            current = data
+        elif current is not None:
+            _team, player_slug = _team_from_pp_href(data)
+            if player_slug:
+                sel[current].add(player_slug)
+
+
+def _parse_lineup_block(game_html, home, away, game):
+    """
+    Find the `<div class="divseparator">...</div>` lineup table for
+    the game and classify every pp- link inside it by team-slug
+    prefix into the appropriate team's "named" bucket. Strays are
+    ignored.
+
+    If no lineup table is present (typical mid-week before lineups
+    drop), this is a no-op -- named will be filled later by the
+    interchange + ins roll-up in the caller.
+    """
+    m = re.search(
+        r'<div\s+class="divseparator"[^>]*>(.*?)</div>',
+        game_html, re.I | re.DOTALL)
+    if not m:
+        return
+    lineup_html = m.group(1)
+    for link_m in re.finditer(
+            r"\b(pp-[a-z0-9-]+?--[a-z0-9][a-z0-9-]*)\b",
+            lineup_html, re.I):
+        team_name, player_slug = _team_from_pp_href(link_m.group(1))
+        if not team_name or not player_slug:
+            continue
+        if team_name == home:
+            game["home_selections"]["named"].add(player_slug)
+        elif team_name == away:
+            game["away_selections"]["named"].add(player_slug)
+
+
+def fw_fetch_team_selections(session):
+    """
+    Fetch and parse the footywire team-selections page. Never raises --
+    returns a result dict with `raw_warnings` populated on any failure.
+
+    Renamed from `fetch_team_selections` at inline time to avoid colliding
+    with the app's own zero-argument `fetch_team_selections()` which scrapes
+    the same page via a different (Streamlit-cached) path.
+
+    The script can run without this data; integration is additive.
+    """
+    try:
+        html = fw_fetch(TEAM_SEL_URL, session, label="team selections")
+    except Exception as exc:                                  # noqa: BLE001
+        return {"round": None, "games": [], "raw_warnings": [
+            f"fetch failed: {exc!s}"]}
+    return parse_team_selections(html)
+
+
+def _serialise_team_selections(ts):
+    """
+    Convert the team-selections dict into a fully JSON-serialisable
+    form (sets -> sorted lists). Streamlit dataframes / json output
+    don't accept sets. Idempotent: safe to call on already-serialised
+    data.
+    """
+    if not ts:
+        return {"round": None, "games": [], "raw_warnings": []}
+    out = {
+        "round": ts.get("round"),
+        "raw_warnings": list(ts.get("raw_warnings", [])),
+        "games": [],
+    }
+    for g in ts.get("games", []):
+        ng = {"home": g["home"], "away": g["away"],
+              "venue": g.get("venue", "")}
+        for side in ("home_selections", "away_selections"):
+            ns = {}
+            for k, v in g[side].items():
+                ns[k] = sorted(v) if isinstance(v, set) else list(v)
+            ng[side] = ns
+        out["games"].append(ng)
+    return out
+
+
+# --- player roster ground truth from ft_players ---------------------------
+#
+# Footywire's ft_players page is the authoritative roster: every current AFL
+# player listed once, hyperlinked to pp-{team-slug}--{player-slug}. We scrape
+# it to know which CURRENT club each player_slug belongs to. This is the
+# correct source of truth for resolving "where does this player play in
+# 2026?" -- it beats counting their historical rows because:
+#   * mid-season trades (Karl Amon: Port -> Hawthorn) are reflected
+#     immediately, regardless of how many games sit under each old team
+#   * mid-year list movements (delistings, top-up signings) update too
+#   * pre-season trades are no longer dependent on a curated TRADES_2026
+#     dict to flag the correct club
+
+def parse_player_roster(html):
+    """
+    Parse the ft_players page. Returns {player_slug: team_canonical}.
+
+    The page is one massive A-Z list of <a href='pp-TEAM--PLAYER'> links;
+    every link points to a player profile, and the team prefix gives the
+    player's CURRENT club. We just walk all pp- hrefs and map them. Easy
+    and robust to layout changes since the only invariant is the href
+    pattern itself.
+
+    Returns an empty dict on any parse failure -- the rest of the
+    pipeline must keep working without this data.
+    """
+    if not html:
+        return {}
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:                                         # noqa: BLE001
+        return {}
+    roster = {}
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if "pp-" not in href:
+            continue
+        team, slug = _team_from_pp_href(href)
+        if team and slug:
+            # first occurrence wins; ft_players lists each player ONCE so
+            # this is moot in practice, but defensive against duplicates
+            # (e.g. promoted in the View Player Profile dropdown HTML).
+            roster.setdefault(slug, team)
+    return roster
+
+
+def _load_roster_cache(path=ROSTER_CACHE_FILE):
+    """
+    Load the on-disk roster cache. Returns (roster_dict, age_seconds).
+    age_seconds is None when cache is absent or unreadable.
+    """
+    if not os.path.exists(path):
+        return {}, None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return {}, None
+    if not isinstance(blob, dict):
+        return {}, None
+    fetched_at = blob.get("fetched_at")
+    roster = blob.get("roster", {})
+    if not isinstance(roster, dict):
+        return {}, None
+    if not isinstance(fetched_at, (int, float)):
+        return roster, None
+    return roster, max(0.0, time.time() - fetched_at)
+
+
+def _save_roster_cache(roster, path=ROSTER_CACHE_FILE):
+    """Persist the roster dict alongside a timestamp."""
+    blob = {"fetched_at": time.time(), "roster": roster}
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(blob, fh)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def fetch_player_roster(session, force_refresh=False,
+                          ttl=ROSTER_CACHE_TTL_SECONDS):
+    """
+    Return {player_slug: team_canonical} from Footywire's ft_players page.
+
+    Cached on disk for `ttl` seconds. Falls back to stale cache if the
+    network fetch fails. Returns {} only when both the cache miss and
+    the live fetch fail -- in that case the caller continues without
+    roster ground truth (existing count-based logic takes over).
+    """
+    cached, age = _load_roster_cache()
+    if cached and not force_refresh and age is not None and age < ttl:
+        return cached
+
+    try:
+        html = fw_fetch(FT_PLAYERS_URL, session, label="player roster")
+    except Exception:                                         # noqa: BLE001
+        # network failed -- prefer stale cache to nothing
+        return cached
+
+    fresh = parse_player_roster(html)
+    if not fresh:
+        # parse came back empty (page format changed?) -- prefer stale
+        return cached
+    _save_roster_cache(fresh)
+    return fresh
+
+
+def _bracket_for_actual(actual_d, thresholds):
+    """
+    Given a player's actual disposal count and the threshold list,
+    return the HIGHEST threshold they hit. Returns 0 if they hit none.
+    Example: actual=27, thresholds=[18,20,22,24,26,28,30,32] -> 26
+    """
+    if actual_d is None:
+        return None
+    hit = [t for t in thresholds if actual_d >= t]
+    return max(hit) if hit else 0
+
+
+def _format_player_grading_row(player_snap, actual_d, thresholds, role_abbr):
+    """
+    Render one player's row in the mid-round graded view.
+    Highlights the threshold the player actually crossed using brackets.
+
+    Returns the string to log.
+    """
+    name = player_snap["player"]
+    role = role_abbr.get(player_snap.get("role", "?"), "?")
+    proj = player_snap.get("mean", 0.0)
+    bracket = _bracket_for_actual(actual_d, thresholds)
+
+    cells = []
+    for t in thresholds:
+        try:
+            p = float(player_snap["probs"].get(str(t),
+                       player_snap["probs"].get(t, 0)))
+        except (TypeError, ValueError):
+            p = 0.0
+        # highlight the highest threshold the player crossed: wrap in
+        # brackets so it stands out in a plain-text terminal.
+        if bracket == t and bracket > 0:
+            cells.append(f"[{p:<4.2f}]")    # 6 chars: [0.86]
+        else:
+            cells.append(f" {p:<5.2f}")     # 6 chars: " 0.86 "
+
+    cell_str = "".join(cells)
+    # actual disposal count, padded
+    actual_str = f"{actual_d:>3d}" if actual_d is not None else " ? "
+    return (f"  {name:<22}{role:>5}{proj:>6.1f}  D={actual_str}  "
+            f"{cell_str}")
+
+
+def _print_mid_round_grading(rnd, mid_round_played, snapshot_data,
+                              master, thresholds, role_abbr):
+    """
+    Render the GAMES ALREADY PLAYED section for a mid-progress round.
+
+    Args:
+      rnd: current round number (e.g. 11)
+      mid_round_played: list of game dicts from parse_fixture's
+        completed list, filtered to this round
+      snapshot_data: dict loaded from predictions/round_NN.json, or
+        None if no snapshot was saved before this round started
+      master: full master CSV rows (used to look up actual disposals)
+      thresholds: list of disposal thresholds
+      role_abbr: dict mapping role name to short abbreviation
+
+    Returns:
+      (n_graded_players, mean_abs_error, brier) -- summary stats so
+      the caller can print a round-so-far line. Returns (0, 0.0, 0.0)
+      if grading wasn't possible.
+    """
+    width = 60 + 6 * len(thresholds)
+    log("")
+    log("=" * width)
+    log(f"  GAMES ALREADY PLAYED IN ROUND {rnd}  "
+        f"({len(mid_round_played)} game(s))")
+    log("=" * width)
+
+    if snapshot_data is None:
+        log("  No snapshot saved for this round before games started.")
+        log("  Grading unavailable -- next time, run the script BEFORE")
+        log("  any of the round's games begin to capture pre-game")
+        log("  projections.")
+        return 0, 0.0, 0.0
+
+    # index snapshot by (player, team) for fast lookup
+    snap_by_pt = {(p["player"], p["team"]): p
+                   for p in snapshot_data.get("players", [])}
+    snap_thresholds = [int(t) for t in
+                       snapshot_data.get("thresholds", thresholds)]
+
+    # build a (player, team) -> actual_D lookup from master rows
+    # belonging to this round only
+    actuals = {}
+    for r in master:
+        try:
+            if int(r.get("round", -1)) == rnd:
+                actuals[(r["player"], r["team"])] = int(r.get("D", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+
+    thr_head = "".join(f" +{t:<4}" for t in thresholds)
+    n_graded = 0
+    sum_abs_err = 0.0
+    preds_for_brier = []
+
+    for game in mid_round_played:
+        mid = game.get("mid")
+        # find the two teams in this game from master rows of this mid
+        teams_in_game = []
+        for r in master:
+            try:
+                if int(r.get("mid", -1)) == mid:
+                    if r["team"] not in teams_in_game:
+                        teams_in_game.append(r["team"])
+            except (TypeError, ValueError):
+                continue
+        if len(teams_in_game) != 2:
+            log(f"\n  (could not resolve teams for mid={mid}, "
+                f"skipping this game)")
+            continue
+
+        venue = game.get("venue", "")
+
+        # If the snapshot has NO entries for either team in this game,
+        # the game was played BEFORE the first projection-run for this
+        # round, so it was never in the snapshot to begin with. That's
+        # a snapshot-timing issue, not 46 individual "late inclusions".
+        # Surface it as ONE short, honest note for the whole game.
+        snap_count = sum(1 for p in snapshot_data.get("players", [])
+                          if p["team"] in teams_in_game)
+        if snap_count == 0:
+            log("")
+            log("-" * width)
+            log(f"  {teams_in_game[0]}  v  {teams_in_game[1]}    @ {venue}")
+            log("-" * width)
+            log("  (no pre-game snapshot for this game -- it was already")
+            log("   played before this round was first projected, so")
+            log("   there is nothing to grade. Future rounds will have a")
+            log("   full snapshot if you run the script before kickoff.)")
+            continue
+
+        log("")
+        log("-" * width)
+        log(f"  {teams_in_game[0]}  v  {teams_in_game[1]}    @ {venue}")
+        log("-" * width)
+        log(f"  {'player':<22}{'role':>5}{'proj':>6}  {'actual':<6}"
+            f" {thr_head.lstrip()}")
+        log("  " + "-" * (width - 2))
+
+        for team in teams_in_game:
+            # find every player in master who played this game for this team
+            played_players = sorted(
+                [r["player"] for r in master
+                 if int(r.get("mid", -1) or -1) == mid
+                 and r["team"] == team],
+                key=lambda p: -actuals.get((p, team), 0))
+
+            log(f"  -- {team} --")
+            graded_in_team = 0
+            for player in played_players:
+                actual = actuals.get((player, team))
+                snap = snap_by_pt.get((player, team))
+                if snap is None:
+                    # player played but was not in the pre-round snapshot
+                    log(f"  {player:<22}{'':>5}{'':>6}  D={actual:>3d}"
+                        f"  (not in snapshot -- late inclusion)")
+                    continue
+                if snap.get("bucket") != "likely":
+                    # was in snapshot but flagged uncertain/stale -- show
+                    # but don't penalise the model with their (p, y) pairs
+                    log(_format_player_grading_row(
+                        snap, actual, snap_thresholds, role_abbr)
+                        + f"  (was {snap.get('bucket', '?')})")
+                    continue
+                log(_format_player_grading_row(
+                    snap, actual, snap_thresholds, role_abbr))
+                n_graded += 1
+                graded_in_team += 1
+                sum_abs_err += abs(actual - snap.get("mean", 0.0))
+                # collect (p, y) for round-so-far Brier
+                for t in snap_thresholds:
+                    try:
+                        p = float(snap["probs"].get(str(t),
+                                  snap["probs"].get(t, 0)))
+                    except (TypeError, ValueError):
+                        continue
+                    y = 1 if actual >= t else 0
+                    preds_for_brier.append((p, y))
+            if graded_in_team == 0:
+                log("    (no LIKELY-bucket players to grade for this team)")
+
+    log("")
+    if n_graded:
+        mae = sum_abs_err / n_graded
+        brier = _brier(preds_for_brier) if preds_for_brier else 0.0
+        log(f"  ROUND-SO-FAR: graded {n_graded} players across "
+            f"{len(mid_round_played)} game(s)")
+        log(f"               mean abs error vs projected = "
+            f"{mae:.2f} disposals")
+        log(f"               Brier score across all thresholds = "
+            f"{brier:.4f}")
+        log("  Brackets [0.86] highlight the threshold each player "
+            "actually crossed.")
+        log("  e.g. [0.86] at +26 means the projection had 86% "
+            "for 26+, and the player got 26-27 disposals.")
+        return n_graded, mae, brier
+    log("  No graded players this round-so-far (no snapshot match yet).")
+    return 0, 0.0, 0.0
+
+
+def _find_stat_tables(soup, header_prefix):
+    """
+    Find the two player-stat tables on a match page. Returns a list of
+    (canonical_team, <table>). Only genuine '<Team> Match Statistics
+    (Sorted by Disposals)' headers for known clubs are accepted, so
+    stray 'AFL Match Statistics' nav text never becomes a fake team.
+    """
+    tables = []
+    seen = set()
+    for header in soup.find_all(string=re.compile(r"Match Statistics")):
+        m = re.search(
+            r"(.+?)\s+Match Statistics\s*\(Sorted by Disposals\)",
+            header.strip())
+        if not m:
+            continue
+        team = canon_team(m.group(1).strip())
+        if team not in VALID_CLUBS:
+            continue
+        node = header.parent
+        table = None
+        while node is not None:
+            table = node.find_next("table")
+            if table is None:
+                break
+            if table.get_text(" ", strip=True).startswith(header_prefix):
+                break
+            node = table
+        if table is not None and id(table) not in seen:
+            seen.add(id(table))
+            tables.append((team, table))
+    return tables
+
+
+def parse_basic(html, meta):
+    """
+    Parse a basic match page. Returns a list of player-game row dicts,
+    each carrying the slug + name keys for the later merge.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    tables = _find_stat_tables(soup, "Player K HB D")
+
+    rows, teams = [], []
+    for team, table in tables[:2]:
+        teams.append(team)
+        for tr in table.find_all("tr"):
+            cells = tr.find_all("td")
+            if len(cells) < 18:
+                continue
+            name = clean_player_name(cells[0])
+            if not name or name == "Player":
+                continue
+            try:
+                stats = [int(cells[i].get_text(strip=True) or 0)
+                         for i in range(1, 18)]
+            except ValueError:
+                continue
+            row = {
+                "mid": meta["mid"], "round": meta["round"],
+                "date": meta["date"], "venue": meta["venue"],
+                "team": team, "player": name,
+                "player_slug": player_slug(cells[0]) or "",
+                "_namekey": norm_name(name),
+            }
+            row.update(dict(zip(STAT_COLS, stats)))
+            rows.append(row)
+
+    if len(teams) == 2:
+        a, b = teams
+        for row in rows:
+            row["opponent"] = b if row["team"] == a else a
+            row["h_a"] = "home" if row["team"] == a else "away"
+    else:
+        for row in rows:
+            row["opponent"], row["h_a"] = "", ""
+    return rows
+
+
+def parse_advanced(html, meta):
+    """Parse an &advv=Y match page. Returns advanced player-game rows."""
+    soup = BeautifulSoup(html, "lxml")
+    tables = _find_stat_tables(soup, "Player CP UP ED")
+
+    rows = []
+    for team, table in tables[:2]:
+        for tr in table.find_all("tr"):
+            cells = tr.find_all("td")
+            if len(cells) < 18:
+                continue
+            name = clean_player_name(cells[0])
+            if not name or name == "Player":
+                continue
+            values = [to_number(cells[i].get_text(strip=True),
+                                 is_float=col in ADV_FLOAT_COLS)
+                      for i, col in enumerate(ADV_COLS, start=1)]
+            row = {
+                "mid": meta["mid"], "team": team,
+                "player_slug": player_slug(cells[0]) or "",
+                "_namekey": norm_name(name),
+                "player_adv_name": name,
+            }
+            row.update(dict(zip(ADV_COLS, values)))
+            rows.append(row)
+    return rows
+
+
+# ==========================================================================
+# SECTION 4  --  STAGE 1: SCRAPE   &   STAGE 2: MERGE
+# ==========================================================================
+
+def stage1_scrape(session, args):
+    """
+    Scrape basic + advanced stats for every completed game (cached).
+    Returns (all_basic, all_advanced, upcoming_fixtures).
+    """
+    global _BAR
+    banner("STAGE 1  --  SCRAPE  (basic + advanced player stats)")
+
+    cache = {} if args.refresh else load_cache()
+    log(f"  cache holds {len(cache)} games "
+        f"({'ignored: --refresh' if args.refresh else 'will be reused'})")
+
+    log("  fetching fixture page ...")
+    fixture_html = fw_fetch(FIXTURE_URL, session, label="fixture")
+    completed, upcoming, n_byes = parse_fixture(fixture_html)
+    log(f"  fixture: {len(completed)} completed, {len(upcoming)} upcoming, "
+        f"{n_byes} byes")
+
+    if args.limit:
+        completed = completed[:args.limit]
+        log(f"  --limit {args.limit}: scraping {len(completed)} games")
+
+    n_cached = sum(1 for g in completed if str(g["mid"]) in cache)
+    log(f"  {n_cached} already cached, {len(completed) - n_cached} to fetch")
+    log("-" * 72)
+
+    all_basic, all_adv = [], []
+    failures = []
+
+    iterator = (tqdm(completed, unit="game", ncols=72)
+                if HAVE_TQDM else completed)
+    if HAVE_TQDM:
+        _BAR = iterator
+
+    for game in iterator:
+        mid = game["mid"]
+        key = str(mid)
+        tag = f"R{game['round']:>2} mid={mid}"
+        try:
+            if key in cache:
+                basic = cache[key]["basic"]
+                advanced = cache[key]["advanced"]
+                src = "cache"
+            else:
+                basic = parse_basic(
+                    fw_fetch(MATCH_URL.format(mid=mid), session,
+                          label=f"basic {mid}"), game)
+                time.sleep(args.delay)
+                advanced = parse_advanced(
+                    fw_fetch(ADV_URL.format(mid=mid), session,
+                          label=f"adv {mid}"), game)
+                time.sleep(args.delay)
+                cache[key] = {"basic": basic, "advanced": advanced}
+                save_cache(cache)
+                src = "fetched"
+
+            all_basic.extend(basic)
+            all_adv.extend(advanced)
+            log(f"  OK  {tag}  basic:{len(basic):>2} adv:{len(advanced):>2}"
+                f"  ({src})")
+        except Exception as exc:                       # noqa: BLE001
+            log(f"  XX  {tag}  FAILED -- {exc}")
+            failures.append(mid)
+
+    if HAVE_TQDM:
+        _BAR.close()
+        _BAR = None
+
+    log("-" * 72)
+    log(f"  scraped {len(completed) - len(failures)}/{len(completed)} "
+        f"games OK, {len(failures)} failed")
+    if failures:
+        log(f"  failed mids: {failures}")
+
+    # Fetch the team-selections page. This is the LATEST round only,
+    # populated from ~6:20pm Perth time Thu (Thu-night game) and Fri
+    # (everything else). Always-best-effort: never fatal, never delays
+    # the pipeline on failure.
+    log("  fetching team selections page ...")
+    team_sel = fw_fetch_team_selections(session)
+    n_games = len(team_sel.get("games", []))
+    r_num = team_sel.get("round")
+    if team_sel.get("raw_warnings"):
+        for w in team_sel["raw_warnings"]:
+            log(f"    team-selections warning: {w}")
+    if r_num is None or n_games == 0:
+        log("    team selections unavailable -- Stage 4 will run without")
+        log("    in/out enrichment. (page may not be published yet; "
+            "released ~6:20pm Perth time Thu/Fri.)")
+    else:
+        n_out = sum(len(g["home_selections"]["out"]) +
+                    len(g["away_selections"]["out"])
+                    for g in team_sel["games"])
+        n_named = sum(len(g["home_selections"]["named"]) +
+                      len(g["away_selections"]["named"])
+                      for g in team_sel["games"])
+        log(f"    team selections: ROUND {r_num}, {n_games} games covered, "
+            f"{n_named} named, {n_out} listed out")
+
+    # Fetch the ft_players roster page (cached on disk for 24h). This is
+    # the AUTHORITATIVE current-club mapping for every AFL player and
+    # lets Stage 4 correctly attribute traded players to their new club
+    # regardless of how their 2026 game history splits. Best-effort: if
+    # the page can't be fetched the rest of the pipeline still runs and
+    # build_distributions falls back to count-based team attribution.
+    log("  fetching player roster page ...")
+    roster = fetch_player_roster(session)
+    if roster:
+        log(f"    player roster: {len(roster)} players mapped to "
+            f"current clubs (cached up to "
+            f"{ROSTER_CACHE_TTL_SECONDS // 3600}h).")
+    else:
+        log("    player roster unavailable -- Stage 4 will fall back to "
+            "count-based team attribution.")
+
+    return all_basic, all_adv, upcoming, completed, team_sel, roster
+
+
+def stage2_merge(all_basic, all_adv, args):
+    """
+    Merge basic + advanced into one master dataset on (mid, team, slug),
+    with a normalised-name fallback. Verifies the result, writes
+    afl_2026_master.csv, and returns the merged rows.
+    """
+    banner("STAGE 2  --  MERGE  (join basic + advanced, verify, write)")
+
+    # index advanced rows; drop name-keys shared by 2+ players so the
+    # fallback can never pick the wrong one (e.g. Chad vs Corey Warner).
+    by_slug, by_name, name_counts = {}, {}, {}
+    slug_dupes = []
+    for r in all_adv:
+        if r["player_slug"]:
+            k = (r["mid"], r["team"], r["player_slug"])
+            if k in by_slug:
+                slug_dupes.append(f"{k} '{r.get('player_adv_name')}'")
+            by_slug[k] = r
+        if r["_namekey"]:
+            nk = (r["mid"], r["team"], r["_namekey"])
+            name_counts[nk] = name_counts.get(nk, 0) + 1
+            by_name[nk] = r
+    ambiguous = {nk for nk, c in name_counts.items() if c > 1}
+    for nk in ambiguous:
+        by_name.pop(nk, None)
+
+    master = []
+    matched_slug = matched_name = 0
+    unmerged = []
+    for b in all_basic:
+        merged = dict(b)
+        adv, how = None, None
+        if b["player_slug"]:
+            adv = by_slug.get((b["mid"], b["team"], b["player_slug"]))
+            if adv:
+                how = "slug"
+        if adv is None and b["_namekey"]:
+            adv = by_name.get((b["mid"], b["team"], b["_namekey"]))
+            if adv:
+                how = "name"
+        if adv is not None:
+            for col in ADV_COLS:
+                merged[col] = adv[col]
+            if how == "slug":
+                matched_slug += 1
+            else:
+                matched_name += 1
+        else:
+            for col in ADV_COLS:
+                merged[col] = ""
+            unmerged.append(f"mid={b['mid']} {b['team']} '{b['player']}'")
+        merged["_merge"] = how or "NONE"
+        master.append(merged)
+
+    # ---- verification report ----
+    total_matched = matched_slug + matched_name
+    coverage = (100.0 * total_matched / len(all_basic)
+                if all_basic else 0.0)
+    log("  MERGE VERIFICATION")
+    log(f"    basic player-games   : {len(all_basic):,}")
+    log(f"    advanced player-games: {len(all_adv):,}")
+    log(f"    matched via slug     : {matched_slug:,}")
+    log(f"    matched via name-key : {matched_name:,}")
+    log(f"    advanced coverage    : {coverage:.1f}%")
+
+    sound = True
+    if slug_dupes:
+        sound = False
+        log(f"    WARNING: {len(slug_dupes)} duplicate slugs (a fault):")
+        for d in slug_dupes[:8]:
+            log(f"        - {d}")
+    if unmerged:
+        log(f"    WARNING: {len(unmerged)} player-games have NO advanced "
+            f"stats:")
+        for u in unmerged[:10]:
+            log(f"        - {u}")
+        if len(unmerged) > 10:
+            log(f"        ... and {len(unmerged) - 10} more")
+        if args.strict:
+            sound = False
+    if ambiguous:
+        log(f"    NOTE: {len(ambiguous)} shared name-keys "
+            f"(handled correctly by the slug key)")
+
+    if sound and not unmerged:
+        log("    RESULT: every player-game merged cleanly. SOUND.")
+    elif sound:
+        log("    RESULT: merge acceptable (warnings above, none fatal).")
+    else:
+        log("    RESULT: merge has issues -- see warnings above.")
+
+    if args.strict and not sound:
+        log("  ABORTED: --strict set and merge not fully sound. "
+            "Master NOT written.")
+        sys.exit(2)
+
+    # Master dataset stays IN MEMORY -- no CSV side-effect. The cache
+    # (afl_cache.json) is the durable raw layer; master is rebuilt from
+    # it on every run in <1 second. A Streamlit app (or any other
+    # consumer) gets master as a return value from the pipeline.
+    log(f"  master dataset built in memory: {len(master):,} rows "
+        f"({len(STAT_COLS) + len(ADV_COLS)} stats per row)")
+    return master
+
+
+# ==========================================================================
+# SECTION 5  --  THE MODEL  (Negative Binomial + role + form-break)
+# ==========================================================================
+
+def _nb_params(mean, var):
+    """(mean, variance) -> Negative Binomial (r, p). Floors var > mean."""
+    mean = max(mean, 1e-6)
+    var = max(var, mean * 1.05)
+    p = min(max(mean / var, 1e-6), 1 - 1e-6)
+    r = max(mean * p / (1.0 - p), 1e-6)
+    return r, p
+
+
+def _nb_sf(threshold, r, p):
+    """Survival function P(X >= threshold) for Negative Binomial (r, p)."""
+    if threshold <= 0:
+        return 1.0
+    q = 1.0 - p
+    pmf = math.exp(r * math.log(p))        # P(X = 0)
+    cdf = pmf
+    for k in range(1, int(threshold)):
+        pmf *= (k + r - 1.0) / k * q
+        cdf += pmf
+    return max(0.0, min(1.0, 1.0 - cdf))
+
+
+def _wmean_wvar(values, weights):
+    """Weighted mean and variance of parallel lists."""
+    wsum = sum(weights)
+    if wsum <= 0:
+        return 0.0, 0.0
+    mean = sum(v * w for v, w in zip(values, weights)) / wsum
+    var = sum(w * (v - mean) ** 2 for v, w in zip(values, weights)) / wsum
+    return mean, var
+
+
+def detect_form_break(disposals, min_side=3, min_shift=4.0):
+    """
+    Find a mid-season step-change in a player's disposal level (e.g. a
+    midfield move). Returns the index where the player's CURRENT form
+    begins -- 0 if no break -- so the baseline uses post-break games.
+    Requires the shift to exceed both an absolute floor and the
+    within-block noise, so a noisy-but-steady player does not trip it.
+    """
+    n = len(disposals)
+    if n < 2 * min_side:
+        return 0
+    best_split, best_shift = 0, 0.0
+    for split in range(min_side, n - min_side + 1):
+        before, after = disposals[:split], disposals[split:]
+        shift = abs(sum(after) / len(after) - sum(before) / len(before))
+        if shift > best_shift:
+            best_shift, best_split = shift, split
+    if best_split and best_shift >= min_shift:
+        before, after = disposals[:best_split], disposals[best_split:]
+        bm = sum(before) / len(before)
+        am = sum(after) / len(after)
+
+        def _sd(block, mean):
+            if len(block) < 2:
+                return 0.0
+            return (sum((x - mean) ** 2 for x in block)
+                    / (len(block) - 1)) ** 0.5
+
+        pooled = (_sd(before, bm) + _sd(after, am)) / 2.0
+        if best_shift >= max(min_shift, 1.2 * pooled):
+            return best_split
+    return 0
+
+
+# --- role inference -------------------------------------------------------
+
+def _role_scores(p):
+    """
+    Score a player's averaged profile against each role template.
+
+    Uses BOTH basic CL (clearances) and the advanced split CCL (centre
+    bounce clearances) / SCL (stoppage clearances) when available --
+    CCL specifically identifies genuine centre-bounce midfielders, a
+    sharper signal than CL alone.
+    """
+    d = max(p["d"], 1e-6)
+    mr = p["m"] / d                        # marks-as-share-of-disposals
+    # CCL > 0 means the player regularly attends centre bounces --
+    # a strong inside-mid signal that CL alone can't distinguish from a
+    # high-stoppage forward.
+    ccl_bonus = p.get("ccl", 0.0) * 1.5
+    return {
+        "ruck": p["ho"] * 2.0 + p["m"] * 0.3,
+        "inside_mid": (p["cl"] * 2.5 + ccl_bonus + p["cg"]
+                       + d * 0.25 - p["m"] * 0.3),
+        "wing_half_back": (d * 0.55 + p["r50"] * 1.4 + p["m"] * 0.6
+                           - p["cl"] * 1.2 - ccl_bonus * 0.5
+                           - mr * 30.0),
+        "key_defender": (mr * 38.0 + p["m"] + p["r50"] * 2.0
+                         - p["cl"] * 2.0 - ccl_bonus
+                         - p["g"] * 7.0 - p["i50"] * 2.5 - d * 0.15),
+        "key_forward": (p["g"] * 3.0 + p["m"] + p["i50"] * 0.6
+                        - d * 0.25 - p["r50"] * 1.5 - ccl_bonus),
+        "small_forward": (p["g"] * 2.5 + p["t"] * 0.8
+                          - d * 0.20 - p["m"] * 0.8 - ccl_bonus),
+        "generalist": 4.0,
+    }
+
+
+def infer_roles(player_rows):
+    """Assign each player a role from their average stat profile."""
+    by_player = defaultdict(list)
+    for r in player_rows:
+        by_player[r["player"]].append(r)
+
+    out = {}
+    for player, games in by_player.items():
+        n = len(games)
+
+        def avg(key, default=0):
+            total = 0.0
+            count = 0
+            for g in games:
+                v = g.get(key, default)
+                if v in ("", None):
+                    continue
+                try:
+                    total += float(v)
+                    count += 1
+                except (TypeError, ValueError):
+                    continue
+            return total / count if count else 0.0
+
+        prof = {"d": avg("D"), "m": avg("M"), "ho": avg("HO"),
+                "cl": avg("CL"), "i50": avg("I50"), "r50": avg("R50"),
+                "g": avg("G"), "t": avg("T"), "cg": avg("CG"),
+                "ccl": avg("CCL"), "scl": avg("SCL")}
+        scores = _role_scores(prof)
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+        out[player] = ranked[0][0]
+    return out
+
+
+# --- opponent strength ----------------------------------------------------
+
+def compute_ladder(player_rows):
+    """
+    Reconstruct the live ladder from the per-player rows.
+
+    Each unique game contributes one result for each team. AFL ladder
+    is sorted by: wins desc, then percentage desc. Returns dict
+    {team: ladder_position} with 1 = top of the ladder.
+
+    Works from the player data alone -- no external feed needed -- by
+    aggregating each game's home/away scores from the player K/HB sums
+    is unreliable, so we derive each team's points for/against by
+    counting wins from the team-vs-team net disposal advantage... no,
+    that's a hack. The cleanest way: each row carries the player's
+    team and opponent; one game per mid produces one team-pair. We
+    decide the winner from a tally of each team's total disposals -- 
+    that's not what AFL records but it's a stable proxy when goal
+    data isn't present per-row.
+
+    For accuracy we recover the actual winner by reading each game's
+    Goals * 6 + Behinds for both teams summed across players (G and B
+    are in the basic stats).
+    """
+    # build per-game team scores: 6*G + B summed across each team's players
+    game_scores = defaultdict(lambda: defaultdict(lambda: [0, 0]))
+    # game_scores[mid][team] = [goals_sum, behinds_sum]
+    for r in player_rows:
+        mid = r["mid"]
+        team = r["team"]
+        try:
+            g = int(r.get("G", 0) or 0)
+            b = int(r.get("B", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        game_scores[mid][team][0] += g
+        game_scores[mid][team][1] += b
+
+    wins = defaultdict(int)
+    losses = defaultdict(int)
+    draws = defaultdict(int)
+    points_for = defaultdict(int)
+    points_against = defaultdict(int)
+
+    for mid, teams_scores in game_scores.items():
+        if len(teams_scores) != 2:
+            continue
+        (ta, sa), (tb, sb) = list(teams_scores.items())
+        pa = sa[0] * 6 + sa[1]
+        pb = sb[0] * 6 + sb[1]
+        points_for[ta] += pa
+        points_for[tb] += pb
+        points_against[ta] += pb
+        points_against[tb] += pa
+        if pa > pb:
+            wins[ta] += 1
+            losses[tb] += 1
+        elif pb > pa:
+            wins[tb] += 1
+            losses[ta] += 1
+        else:
+            draws[ta] += 1
+            draws[tb] += 1
+
+    teams = set(wins) | set(losses) | set(draws)
+    # AFL premiership points = 4*W + 2*D
+    table = []
+    for t in teams:
+        prem_points = wins[t] * 4 + draws[t] * 2
+        pct = (100.0 * points_for[t] / points_against[t]
+               if points_against[t] > 0 else 0.0)
+        table.append((t, prem_points, pct, wins[t], losses[t], draws[t]))
+
+    # sort by points desc, then percentage desc
+    table.sort(key=lambda row: (-row[1], -row[2]))
+    return {row[0]: i + 1 for i, row in enumerate(table)}
+
+
+def _ladder_factor(position, total_teams=18):
+    """
+    Map a ladder position (1=top) to a disposal-conceded multiplier.
+
+    Top sides defend better -- their opponents score fewer disposals.
+    Bottom sides leak -- their opponents score more.
+
+    Centred at 1.0 for a mid-table side (position ~9.5 of 18). Spread
+    is gentle: top side ~0.94, bottom side ~1.06. That matches the
+    league-wide effect AFL data suggests without overclaiming.
+    """
+    if not position:
+        return 1.0
+    mid = (total_teams + 1) / 2.0
+    # linear: position 1 -> -0.06, position 18 -> +0.06
+    offset = (position - mid) * (0.12 / (total_teams - 1))
+    return 1.0 + offset
+
+
+def team_style_profile(player_rows):
+    """
+    Build each team's defensive STYLE profile from the stats that
+    actually predict opposition disposal suppression.
+
+    Returns dict {team: {tackles, one_pct, contested_marks, contested_poss,
+                          de_pct, pressure_index}}
+    - tackles, one_pct, contested_marks, contested_poss : team per-game
+      averages of the relevant counting stat (sum across all players in
+      that game, then averaged across games).
+    - de_pct : average team disposal efficiency (advanced stat, %).
+      Important caveat: this measures the team's OWN efficiency, not
+      pressure they apply. Included only as a stylistic signal --
+      slow-and-low possession sides tend to also be more methodical
+      defensively.
+    - pressure_index : a z-score across the league combining tackles,
+      one-percenters, contested marks, and contested-possession share.
+      Higher = more defensive pressure = expected to suppress
+      opposition disposals more.
+    """
+    # accumulate team-per-game totals
+    game_team_stats = defaultdict(lambda: defaultdict(lambda: {
+        "T": 0, "1%": 0, "CM": 0, "CP": 0, "de_sum": 0.0, "de_n": 0,
+    }))
+    # game_team_stats[mid][team] = dict of totals
+
+    for r in player_rows:
+        bucket = game_team_stats[r["mid"]][r["team"]]
+        for col in ("T", "CM"):
+            try:
+                bucket[col] += int(r.get(col, 0) or 0)
+            except (TypeError, ValueError):
+                pass
+        # 1% and CP come from advanced stats; treat missing as missing
+        for col in ("1%", "CP"):
+            v = r.get(col, "")
+            if v in ("", None):
+                continue
+            try:
+                bucket[col] += int(float(v))
+            except (TypeError, ValueError):
+                continue
+        # DE% is a player-level percentage; aggregate as the mean
+        de = r.get("DE%", "")
+        if de not in ("", None):
+            try:
+                bucket["de_sum"] += float(de)
+                bucket["de_n"] += 1
+            except (TypeError, ValueError):
+                pass
+
+    # now average across each team's games
+    by_team = defaultdict(lambda: {
+        "T": [], "1%": [], "CM": [], "CP": [], "DE": []})
+    for mid, teams in game_team_stats.items():
+        for team, totals in teams.items():
+            by_team[team]["T"].append(totals["T"])
+            by_team[team]["1%"].append(totals["1%"])
+            by_team[team]["CM"].append(totals["CM"])
+            by_team[team]["CP"].append(totals["CP"])
+            if totals["de_n"]:
+                by_team[team]["DE"].append(totals["de_sum"] / totals["de_n"])
+
+    profiles = {}
+    for team, lists in by_team.items():
+        def _avg(xs):
+            return sum(xs) / len(xs) if xs else 0.0
+        profiles[team] = {
+            "tackles": _avg(lists["T"]),
+            "one_pct": _avg(lists["1%"]),
+            "contested_marks": _avg(lists["CM"]),
+            "contested_poss": _avg(lists["CP"]),
+            "de_pct": _avg(lists["DE"]),
+            "games": len(lists["T"]),
+        }
+
+    # z-score the four pressure signals and combine into a pressure_index
+    def _zscore(values):
+        n = len(values)
+        if n < 2:
+            return [0.0] * n
+        mean = sum(values) / n
+        var = sum((v - mean) ** 2 for v in values) / n
+        sd = var ** 0.5 or 1.0
+        return [(v - mean) / sd for v in values]
+
+    teams_ordered = list(profiles.keys())
+    z_tackles = _zscore([profiles[t]["tackles"] for t in teams_ordered])
+    z_onepct = _zscore([profiles[t]["one_pct"] for t in teams_ordered])
+    z_cmarks = _zscore([profiles[t]["contested_marks"] for t in teams_ordered])
+    z_cp = _zscore([profiles[t]["contested_poss"] for t in teams_ordered])
+
+    # weighted blend: tackles + one-percenters are the most direct
+    # pressure signals; contested marks and CP slightly less direct
+    # (CP is two-sided -- a contested ball you win is one you didn't lose).
+    for i, t in enumerate(teams_ordered):
+        profiles[t]["pressure_index"] = (
+            0.40 * z_tackles[i] + 0.25 * z_onepct[i]
+            + 0.20 * z_cmarks[i] + 0.15 * z_cp[i])
+
+    return profiles
+
+
+def _pressure_factor(pressure_index):
+    """
+    Map a team's pressure z-score to a disposal-suppression multiplier.
+
+    A team one SD above league average pressure suppresses opposition
+    disposals by ~3%; a team one SD below leaks by ~3%. Bounded so the
+    extreme cases don't whiplash the model: max swing roughly +/- 5%.
+    """
+    return max(0.95, min(1.05, 1.0 - 0.03 * pressure_index))
+
+
+def team_pace(player_rows):
+    """
+    Each team's pace (total team disposals per game). Returns
+    {team: pace_multiplier} where multiplier is centred at 1.0 across
+    the league, bounded by PACE_FACTOR_SCALE.
+
+    A high-pace team plays more possessions overall, inflating the
+    total disposal pool for BOTH teams in their games -- so when you
+    project a player against a fast team, the expected total disposal
+    universe is bigger. This is independent of pressure: a team can be
+    high-pace AND high-pressure (Geelong) or low-pace AND low-pressure
+    (a struggling team that walks the ball).
+    """
+    game_team_d = defaultdict(lambda: defaultdict(int))
+    for r in player_rows:
+        try:
+            game_team_d[r["mid"]][r["team"]] += int(r.get("D", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+
+    by_team = defaultdict(list)
+    for mid, teams in game_team_d.items():
+        for team, total in teams.items():
+            by_team[team].append(total)
+
+    if not by_team:
+        return {}
+
+    team_avg = {t: sum(v) / len(v) for t, v in by_team.items()}
+    league_avg = sum(team_avg.values()) / len(team_avg)
+    if league_avg <= 0:
+        return {t: 1.0 for t in team_avg}
+
+    pace = {}
+    for t, avg in team_avg.items():
+        raw_ratio = avg / league_avg
+        # scale around 1.0 and clamp
+        nudge = (raw_ratio - 1.0)
+        nudge = max(-PACE_FACTOR_SCALE,
+                    min(PACE_FACTOR_SCALE, nudge))
+        pace[t] = 1.0 + nudge
+    return pace
+
+
+def opponent_factors(player_rows, ladder=None, style=None):
+    """
+    Per-team opponent factor: how much opposition players score relative
+    to their own season average against this team.
+
+    Layer K/L: blends THREE signals -- empirical conceded-rate, ladder
+    position, AND a defensive PRESSURE INDEX built from the team's
+    tackles, one-percenters, contested marks, and contested-possession
+    share. The pressure index captures HOW a team plays defensively,
+    not just whether they win -- a defensively sound side suppresses
+    disposals even if their ladder position is middling.
+
+    Weights: EMP_WEIGHT + LADDER_WEIGHT + PRESSURE_WEIGHT == 1.0.
+    """
+    player_games = defaultdict(list)
+    for r in player_rows:
+        player_games[r["player"]].append(int(r["D"]))
+    player_avg = {p: sum(v) / len(v) for p, v in player_games.items()}
+
+    ratios = defaultdict(list)
+    for r in player_rows:
+        opp = r.get("opponent")
+        base = player_avg.get(r["player"], 0)
+        if opp and base > 0:
+            ratios[opp].append(int(r["D"]) / base)
+
+    # empirical signal
+    empirical = {}
+    for team, rs in ratios.items():
+        n = len(rs)
+        observed = sum(rs) / n
+        empirical[team] = ((n * observed + OPPONENT_SHRINKAGE)
+                           / (n + OPPONENT_SHRINKAGE))
+
+    # ladder signal
+    if ladder is None:
+        ladder = compute_ladder(player_rows)
+
+    # pressure signal
+    if style is None:
+        style = team_style_profile(player_rows)
+
+    all_teams = set(empirical) | set(ladder) | set(style)
+    factors = {}
+    for team in all_teams:
+        emp = empirical.get(team, 1.0)
+        lad = _ladder_factor(ladder.get(team))
+        prs = _pressure_factor(
+            style.get(team, {}).get("pressure_index", 0.0))
+        factors[team] = (EMP_WEIGHT * emp
+                         + LADDER_WEIGHT * lad
+                         + PRESSURE_WEIGHT * prs)
+    return factors
+
+
+# --- player distributions -------------------------------------------------
+
+def _filter_low_tog_games(rows, drop_below_ratio=0.6, min_kept=3):
+    """
+    Drop games where the player's time-on-ground was far below their
+    typical level -- a medical sub or early injury makes that game's
+    disposal count meaningless for projecting their next full game.
+
+    drop_below_ratio : a game is dropped if its TOG% is < this ratio
+                       times the player's MEDIAN TOG%. Default 0.6 =
+                       drop games at less than 60% of their normal
+                       minutes.
+    min_kept         : never drop so many that fewer than this remain
+                       (we need a baseline).
+
+    Falls back to returning all rows if the data has no TOG% column
+    (e.g. the basic-only fallback cache).
+    """
+    tog_vals = []
+    for r in rows:
+        v = r.get("TOG%", "")
+        if v in ("", None):
+            return rows           # no TOG% available -> no filtering
+        try:
+            tog_vals.append(float(v))
+        except (TypeError, ValueError):
+            return rows
+    if not tog_vals or len(rows) <= min_kept:
+        return rows
+
+    sorted_tog = sorted(tog_vals)
+    median = sorted_tog[len(sorted_tog) // 2]
+    if median <= 0:
+        return rows
+    threshold = median * drop_below_ratio
+
+    kept = [r for r, t in zip(rows, tog_vals) if t >= threshold]
+    if len(kept) < min_kept:
+        return rows               # not enough left -- keep all
+    return kept
+
+
+def build_distributions(player_rows, roster=None):
+    """
+    Build each player's disposal profile. Returns {player: profile}.
+    Form-break detection trims the baseline to post-break games.
+
+    Each profile carries `last_round` and `last_team` so Stage 4 can
+    filter out players who have not played recently (e.g. dropped,
+    injured, out of the side) -- without that filter a player who
+    played twice in March still gets projected for Round 11.
+
+    Primary team resolution (in order of preference):
+      1. `roster` lookup by player_slug (Footywire ft_players page) --
+         this is the AUTHORITATIVE source. Catches mid-season trades
+         (e.g. Karl Amon Port -> Hawthorn) regardless of how the historic
+         game counts split. Pass `roster=None` to skip.
+      2. Count-based: team with the most games, recency-tiebroken. This
+         falls back when the roster lookup misses (debutants whose slug
+         just appeared, or roster fetch failed).
+
+    The profile's `team_source` field records which path was taken.
+    """
+    by_player = defaultdict(list)
+    for r in player_rows:
+        by_player[r["player"]].append(r)
+
+    profiles = {}
+    for player, rows in by_player.items():
+        rows = sorted(rows, key=lambda r: r["mid"])
+        # drop games where the player was on the ground far less than
+        # their typical TOG -- a sub or early injury, not representative.
+        rows_for_baseline = _filter_low_tog_games(rows)
+        n_dropped_tog = len(rows) - len(rows_for_baseline)
+        all_disp = [int(r["D"]) for r in rows_for_baseline]
+
+        # season_avg_d: untrimmed, unweighted mean over all non-junk
+        # games -- the "what did he actually average this year" number
+        # a punter would compute by hand. Separate from base_mu (which
+        # is the recency-weighted, form-break-trimmed projection mean).
+        season_avg_d = (sum(all_disp) / len(all_disp)) if all_disp else 0.0
+
+        brk = detect_form_break(all_disp)
+        base_rows = rows_for_baseline[brk:]
+        disposals = [int(r["D"]) for r in base_rows]
+        n = len(disposals)
+
+        weights = [RECENCY_DECAY ** (n - 1 - i) for i in range(n)]
+        base_mu, base_var = _wmean_wvar(disposals, weights)
+
+        home = [int(r["D"]) for r in base_rows if r.get("h_a") == "home"]
+        away = [int(r["D"]) for r in base_rows if r.get("h_a") == "away"]
+
+        # Layer J -- advanced stat aggregates for the profile.
+        # CP share (contested-possession share = CP / D) is the most
+        # predictive single advanced signal: high-CP players are real
+        # contested-ball winners whose volume is harder to suppress.
+        def _avg_num(key):
+            total, count = 0.0, 0
+            for r in base_rows:
+                v = r.get(key, None)
+                if v in ("", None):
+                    continue
+                try:
+                    total += float(v); count += 1
+                except (TypeError, ValueError):
+                    continue
+            return (total / count) if count else 0.0
+
+        avg_cp = _avg_num("CP")
+        avg_up = _avg_num("UP")           # uncontested poss
+        avg_mg = _avg_num("MG")           # metres gained
+        avg_si = _avg_num("SI")           # score involvements
+        avg_itc = _avg_num("ITC")         # intercepts
+        avg_tog = _avg_num("TOG%")
+        cp_share = (avg_cp / max(base_mu, 1e-6)) if base_mu > 0 else 0.0
+
+        # Layer N -- "reliability" score (added after backtest validation):
+        # combines four advanced signals that each suggest a player's
+        # disposal volume is STRUCTURAL rather than incidental:
+        #
+        #   * cp_share        : contested-ball winners (matchup-resilient)
+        #   * MG per disposal : ball-movers gain territory consistently
+        #   * SI per disposal : players DEMANDED into scoring chains
+        #   * ITC per disposal: defensive readers who self-generate volume
+        #
+        # Each metric is normalised relative to a typical AFL midfielder.
+        # The four components are AVERAGED -- not summed -- so any single
+        # high signal earns partial reliability credit without compounding.
+        # The combined score is bounded [0, 1] and used ONLY to damp
+        # variance (never to shift the mean). This is the safe path:
+        # tighter probability bands around the existing mean, not
+        # speculative changes to where we think the mean lives.
+        def _safe_div(a, b):
+            return (a / b) if b > 0 else 0.0
+        mg_per_d = _safe_div(avg_mg, base_mu)        # ~12-18 for ball-movers
+        si_per_d = _safe_div(avg_si, base_mu)        # ~0.20-0.35 for scorers
+        itc_per_d = _safe_div(avg_itc, base_mu)      # ~0.10-0.25 for readers
+        # normalise: each metric divides by the upper end of its typical
+        # AFL range, clipped to [0, 1].
+        rel_components = [
+            min(1.0, max(0.0, cp_share / 0.45)),
+            min(1.0, max(0.0, mg_per_d / 15.0)),
+            min(1.0, max(0.0, si_per_d / 0.30)),
+            min(1.0, max(0.0, itc_per_d / 0.20)),
+        ]
+        reliability_index = sum(rel_components) / len(rel_components)
+
+        # Primary team resolution: roster ground truth -> count fallback.
+        # Step 1: find this player's most common slug in the rows. Most
+        # players appear with one slug throughout; if there's drift (e.g.
+        # rare typos or a slug change), the majority slug is correct.
+        slug_counts = defaultdict(int)
+        for r in rows:
+            s = (r.get("player_slug") or "").strip().lower()
+            if s:
+                slug_counts[s] += 1
+        primary_slug = (max(slug_counts.items(), key=lambda kv: kv[1])[0]
+                        if slug_counts else "")
+
+        # Step 2: count-based primary team (the prior behaviour, kept as
+        # the fallback when roster says nothing).
+        team_counts = defaultdict(int)
+        latest_team_for = {}
+        for r in rows:
+            team_counts[r["team"]] += 1
+            latest_team_for[r["team"]] = int(r.get("mid", 0) or 0)
+        primary_team_by_count = max(
+            team_counts.items(),
+            key=lambda kv: (kv[1], latest_team_for[kv[0]]))[0]
+
+        # Step 3: prefer the roster's verdict when available.
+        primary_team = primary_team_by_count
+        team_source = "count"
+        if roster and primary_slug:
+            roster_team = roster.get(primary_slug)
+            if roster_team:
+                primary_team = roster_team
+                team_source = "roster"
+
+        # Step 4: mid-season trade detection. A player was traded
+        # MID-SEASON if their current roster team differs from the team
+        # they have any 2026 game history for. This catches the rare but
+        # real cases where a player has played for two clubs in the same
+        # season. Preseason trades (where 2026 history is entirely at
+        # the new club) cannot be detected from current-season data
+        # alone -- we simply don't tag them, which is honest given that
+        # by Round 12 they are not really "new" anymore.
+        mid_season_traded = False
+        prior_team = None
+        if team_source == "roster":
+            for t, count in team_counts.items():
+                if t != primary_team and count > 0:
+                    mid_season_traded = True
+                    # the team they played MOST games for that ISN'T
+                    # their current club is their "prior team"
+                    if (prior_team is None
+                            or count > team_counts.get(prior_team, 0)):
+                        prior_team = t
+
+        last_row = rows[-1]
+        profiles[player] = {
+            "team": primary_team,
+            "team_source": team_source,
+            "mid_season_traded": mid_season_traded,
+            "prior_team": prior_team,
+            "player_slug": primary_slug,
+            "last_team": last_row["team"],
+            "last_round": int(last_row.get("round", 0) or 0),
+            "last_mid": int(last_row.get("mid", 0) or 0),
+            "games_for_primary": team_counts.get(primary_team, 0),
+            "games": n,
+            "all_games": len(rows),
+            "tog_dropped": n_dropped_tog,
+            "season_avg_d": season_avg_d,
+            "base_mu": base_mu,
+            "base_var": base_var,
+            "home_mu": (sum(home) / len(home)) if home else None,
+            "away_mu": (sum(away) / len(away)) if away else None,
+            "n_home": len(home), "n_away": len(away),
+            "form_break": brk > 0,
+            # Layer J advanced-stat aggregates
+            "avg_cp": avg_cp,
+            "avg_up": avg_up,
+            "cp_share": cp_share,
+            "avg_mg": avg_mg,
+            "avg_si": avg_si,
+            "avg_itc": avg_itc,
+            "avg_tog": avg_tog,
+            # Layer N -- composite reliability index (see comment above)
+            "reliability_index": reliability_index,
+        }
+    return profiles
+
+
+def _venue_factor(profile, is_home):
+    """Home/away adjustment factor, shrunk toward 1.0 (small sample)."""
+    base = profile["base_mu"]
+    if base <= 0:
+        return 1.0
+    split_mu, n = ((profile["home_mu"], profile["n_home"]) if is_home
+                   else (profile["away_mu"], profile["n_away"]))
+    if split_mu is None or n == 0:
+        return 1.0
+    observed = split_mu / base
+    return (n * observed + VENUE_SHRINKAGE) / (n + VENUE_SHRINKAGE)
+
+
+def confidence(games):
+    """Map games-played to a confidence label."""
+    if games >= CONF_HIGH_GAMES:
+        return "high"
+    if games >= CONF_MED_GAMES:
+        return "med"
+    return "low"
+
+
+def project(profile, opp_factor, is_home, thresholds=THRESHOLDS,
+            travel_interstate=False, pace_factor=1.0):
+    """
+    Project one player's disposal probabilities for one match-up.
+    Returns {adjusted_mu, confidence, probs:{threshold: P(>=t)}}.
+
+    Adjustments applied (multiplicative on mu unless noted):
+      * venue        : the player's own home/away factor (shrunk to 1.0)
+      * opp_factor   : Layer K/L blended opponent strength
+                       (empirical + ladder + pressure)
+      * pace_factor  : Layer M -- opponent's pace multiplier (centred 1.0)
+      * travel_interstate : Layer H -- INTERSTATE_TRAVEL_FACTOR if True
+      * VARIANCE_INFLATION on the NB variance (calibration fix)
+      * Layer J -- contested-possession damping: high-CP players are
+        less volatile, so their variance is scaled by
+        HIGH_CP_VARIANCE_DAMPENING. Detected from the profile's
+        cp_share (CP/D) if present.
+      * Layer N -- composite RELIABILITY damping. The 4-component
+        reliability_index (cp_share + MG/D + SI/D + ITC/D) scales
+        variance toward RELIABILITY_VARIANCE_FLOOR. Players strong on
+        these structural signals get tighter probability bands. NEVER
+        moves the mean -- only sharpens the distribution around it.
+
+    The NB variance is inflated by VARIANCE_INFLATION (>1) to widen the
+    tails. The base recency-weighted variance underestimates the true
+    spread (the backtest revealed +6 point overconfidence in the top
+    buckets) -- inflating it pulls extreme probabilities back to the
+    observed rate without changing the central mean.
+    """
+    venue = _venue_factor(profile, is_home)
+    mu = profile["base_mu"] * venue * opp_factor * pace_factor
+
+    # Layer H -- interstate travel penalty
+    if travel_interstate:
+        mu *= INTERSTATE_TRAVEL_FACTOR
+
+    disp_ratio = profile["base_var"] / max(profile["base_mu"], 1e-6)
+    var = max(mu * disp_ratio, mu * 1.05) * VARIANCE_INFLATION
+
+    # Layer J -- contested-ball winners are LESS volatile
+    cp_share = profile.get("cp_share", 0.0)
+    if cp_share >= 0.45:
+        var *= HIGH_CP_VARIANCE_DAMPENING
+
+    # Layer N -- composite reliability damping. Players who score high
+    # on the four reliability signals (cp_share, metres-per-disposal,
+    # score-involvements-per-disposal, intercepts-per-disposal) have
+    # MORE structural volume than average; their disposal totals are
+    # less affected by matchup variance. Damp variance proportionally.
+    # Capped so a high-reliability player retains some volatility (60%
+    # of the damping factor still applies even at reliability_index=1.0)
+    # to prevent the model from getting too cocky on stars.
+    if USE_RELIABILITY_DAMPING:
+        rel = profile.get("reliability_index", 0.0)
+        if rel > 0:
+            # damping multiplier: lerp from 1.0 (no damp) at rel=0 down
+            # to RELIABILITY_VARIANCE_FLOOR at rel=1.0
+            rel_damp = 1.0 - rel * (1.0 - RELIABILITY_VARIANCE_FLOOR)
+            var *= rel_damp
+
+    r, p = _nb_params(mu, var)
+    return {
+        "adjusted_mu": mu,
+        "confidence": confidence(profile["games"]),
+        "interstate": bool(travel_interstate),
+        "probs": {t: _nb_sf(t, r, p) for t in thresholds},
+    }
+
+
+# ==========================================================================
+# SECTION 6  --  STAGE 3: BACKTEST
+# ==========================================================================
+
+def _brier(preds):
+    """Mean squared error of probabilities. preds: list of (p, y)."""
+    return (sum((p - y) ** 2 for p, y in preds) / len(preds)
+            if preds else float("nan"))
+
+
+def _log_loss(preds):
+    """Mean log loss, clipped so a confident miss is not infinite."""
+    if not preds:
+        return float("nan")
+    eps = 1e-15
+    return sum(-(y * math.log(min(max(p, eps), 1 - eps))
+                 + (1 - y) * math.log(1 - min(max(p, eps), 1 - eps)))
+               for p, y in preds) / len(preds)
+
+
+def _calibration(preds, n=10):
+    """Bucket predictions; return [(label, count, mean_p, actual), ...]."""
+    buckets = [[] for _ in range(n)]
+    for p, y in preds:
+        buckets[min(int(p * n), n - 1)].append((p, y))
+    table = []
+    for i, b in enumerate(buckets):
+        label = f"{int(i/n*100):>3}-{int((i+1)/n*100):>3}%"
+        if b:
+            table.append((label, len(b),
+                          sum(p for p, _ in b) / len(b),
+                          sum(y for _, y in b) / len(b)))
+        else:
+            table.append((label, 0, None, None))
+    return table
+
+
+def _calibration_error(preds, n=10):
+    """Count-weighted average gap between predicted and actual."""
+    table = _calibration(preds, n)
+    total = sum(c for _, c, _, _ in table)
+    if total == 0:
+        return float("nan")
+    return sum(c * abs(mp - ac) for _, c, mp, ac in table
+               if c and mp is not None) / total
+
+
+def stage3_backtest(master, args):
+    """
+    Walk-forward, out-of-sample backtest. For each game, build the model
+    from earlier games only and score its projections against reality.
+    Prints calibration + Brier vs a naive baseline.
+    """
+    banner("STAGE 3  --  BACKTEST  (walk-forward, out-of-sample)")
+
+    games_by_mid = defaultdict(list)
+    for r in master:
+        games_by_mid[r["mid"]].append(r)
+    ordered = sorted(games_by_mid)
+    rows_sorted = sorted(master, key=lambda r: r["mid"])
+
+    model_preds, base_preds = [], []
+    by_thr_model = {t: [] for t in THRESHOLDS}
+    by_thr_base = {t: [] for t in THRESHOLDS}
+    hist, ptr = [], 0
+    n_pred = n_skip = 0
+
+    log(f"  walking {len(ordered)} games chronologically ...")
+    for gi, mid in enumerate(ordered):
+        while ptr < len(rows_sorted) and rows_sorted[ptr]["mid"] < mid:
+            hist.append(rows_sorted[ptr])
+            ptr += 1
+        if not hist:
+            continue
+
+        profiles = build_distributions(hist)
+        opp_fac = opponent_factors(hist)
+        pace = team_pace(hist)
+        hist_by_player = defaultdict(list)
+        for r in hist:
+            hist_by_player[r["player"]].append(int(r["D"]))
+
+        for row in games_by_mid[mid]:
+            prof = profiles.get(row["player"])
+            if prof is None or prof["games"] < args.min_history:
+                n_skip += 1
+                continue
+            actual = int(row["D"])
+            opp = row.get("opponent", "")
+            venue = row.get("venue", "")
+            proj = project(
+                prof, opp_fac.get(opp, 1.0),
+                row.get("h_a") == "home",
+                travel_interstate=is_interstate(row["team"], venue),
+                pace_factor=pace.get(opp, 1.0),
+            )
+            hd = hist_by_player.get(row["player"], [])
+            n_pred += 1
+            for t in THRESHOLDS:
+                y = 1 if actual >= t else 0
+                pm = proj["probs"][t]
+                model_preds.append((pm, y))
+                by_thr_model[t].append((pm, y))
+                pb = (sum(1 for d in hd if d >= t) / len(hd)
+                      if hd else 0.5)
+                base_preds.append((pb, y))
+                by_thr_base[t].append((pb, y))
+
+        if (gi + 1) % 20 == 0:
+            log(f"    ... {gi + 1}/{len(ordered)} games")
+
+    log(f"  scored {n_pred:,} player-games "
+        f"({n_skip:,} skipped for thin history)")
+
+    if not model_preds:
+        log("  not enough data to backtest.")
+        return None
+
+    # ---- compute headline metrics (also stored for Streamlit) ----
+    headline = {}
+    for name, fn in [("brier", _brier),
+                     ("log_loss", _log_loss),
+                     ("calibration_error", _calibration_error)]:
+        headline[name] = {"model": fn(model_preds),
+                          "baseline": fn(base_preds)}
+
+    # ---- calibration table (Streamlit will plot this) ----
+    calibration_rows = [
+        {"bucket": label, "count": count,
+         "predicted": mp, "actual": ac,
+         "gap": (mp - ac) if (mp is not None and ac is not None) else None}
+        for label, count, mp, ac in _calibration(model_preds)
+    ]
+
+    # ---- per-threshold breakdown ----
+    per_threshold = []
+    for t in THRESHOLDS:
+        m_brier = _brier(by_thr_model[t])
+        b_brier = _brier(by_thr_base[t])
+        per_threshold.append({
+            "threshold": t,
+            "model_brier": m_brier,
+            "baseline_brier": b_brier,
+            "model_wins": m_brier < b_brier,
+        })
+
+    # ---- verdict text + categorical labels ----
+    om, ob = headline["brier"]["model"], headline["brier"]["baseline"]
+    ce = headline["calibration_error"]["model"]
+    if om < ob * 0.98:
+        verdict_model = "beats_baseline"
+    elif om < ob * 1.02:
+        verdict_model = "level_with_baseline"
+    else:
+        verdict_model = "worse_than_baseline"
+    if ce < 0.05:
+        verdict_calibration = "good"
+    elif ce < 0.10:
+        verdict_calibration = "fair"
+    else:
+        verdict_calibration = "poor"
+
+    # ---- print: headline metrics ----
+    log("-" * 72)
+    log("  HEADLINE METRICS  (lower is better)")
+    log(f"    {'metric':<20}{'MODEL':>11}{'BASELINE':>11}{'verdict':>20}")
+    pretty = {"brier": "Brier score", "log_loss": "Log loss",
+              "calibration_error": "Calibration error"}
+    for key in ("brier", "log_loss", "calibration_error"):
+        m, b = headline[key]["model"], headline[key]["baseline"]
+        v = ("model better" if m < b
+             else "baseline better" if m > b else "tie")
+        log(f"    {pretty[key]:<20}{m:>11.4f}{b:>11.4f}{v:>20}")
+    log("    (Brier 0.25 = always guessing 50/50)")
+
+    # ---- print: calibration table ----
+    log("-" * 72)
+    log("  CALIBRATION  (model)  -- predicted vs actual")
+    log(f"    {'bucket':<13}{'count':>8}{'predicted':>11}"
+        f"{'actual':>9}{'gap':>9}")
+    for row in calibration_rows:
+        if row["count"] == 0:
+            log(f"    {row['bucket']:<13}{row['count']:>8}"
+                f"{'--':>11}{'--':>9}{'--':>9}")
+        else:
+            # only flag a calibration gap as "off" when the bucket has
+            # enough predictions to make the gap statistically meaningful.
+            # Small buckets (<100) produce noisy actual rates by chance.
+            if row["count"] < 100:
+                flag = "  (small n)" if abs(row["gap"]) > 0.10 else ""
+            else:
+                flag = "  <-- off" if abs(row["gap"]) > 0.10 else ""
+            log(f"    {row['bucket']:<13}{row['count']:>8}"
+                f"{row['predicted']:>11.3f}{row['actual']:>9.3f}"
+                f"{row['gap']:>+9.3f}{flag}")
+
+    # ---- print: per-threshold breakdown ----
+    log("-" * 72)
+    log("  PER-THRESHOLD BRIER")
+    log(f"    {'threshold':<14}{'MODEL':>11}{'BASELINE':>11}"
+        f"{'model wins?':>14}")
+    for row in per_threshold:
+        log(f"    {('disposals '+str(row['threshold'])):<14}"
+            f"{row['model_brier']:>11.4f}{row['baseline_brier']:>11.4f}"
+            f"{('yes' if row['model_wins'] else 'no'):>14}")
+
+    # ---- print: verdict ----
+    log("-" * 72)
+    log("  VERDICT")
+    if verdict_model == "beats_baseline":
+        log("    Model BEATS the naive baseline on Brier score.")
+    elif verdict_model == "level_with_baseline":
+        log("    Model is roughly LEVEL with the naive baseline --")
+        log("    the extra machinery is not yet adding measurable value.")
+    else:
+        log("    Model is WORSE than the naive baseline -- do not bet")
+        log("    with it until this is understood.")
+    if verdict_calibration == "good":
+        log(f"    Calibration GOOD (error {ce:.3f}) -- probabilities can")
+        log("    be roughly trusted at face value.")
+    elif verdict_calibration == "fair":
+        log(f"    Calibration FAIR (error {ce:.3f}) -- right area, not")
+        log("    precise.")
+    else:
+        log(f"    Calibration POOR (error {ce:.3f}) -- probabilities are")
+        log("    not trustworthy at face value yet.")
+
+    # Return the structured result. A Streamlit app can render any of
+    # these fields directly; the CLI version above prints them.
+    return {
+        "n_predictions": n_pred,
+        "n_skipped": n_skip,
+        "headline": headline,
+        "calibration": calibration_rows,
+        "per_threshold": per_threshold,
+        "verdict": {"model": verdict_model,
+                    "calibration": verdict_calibration},
+    }
+
+
+# ==========================================================================
+# SECTION 7  --  STAGE 4: PROJECT THE NEXT ROUND
+# ==========================================================================
+
+def stage4_project(master, upcoming, completed=None, team_selections=None,
+                     roster=None):
+    """
+    Auto-detect the next round and print every game's player disposal
+    probabilities -- home team then away team, P(>=18) .. P(>=32).
+
+    Two-part view when the round is MID-PROGRESS (some games already
+    played, some still to come):
+      * GAMES ALREADY PLAYED -- graded against the saved snapshot if
+        one exists, showing predicted probabilities, the actual
+        disposal count, and which bracket the player landed in.
+      * UPCOMING GAMES -- the standard projection table.
+
+    Players are GROUPED by recency:
+      LIKELY    : played in the last 2 rounds (the punter-relevant set)
+      UNCERTAIN : played 3-4 rounds ago (maybe back, maybe not)
+      STALE     : not seen for 5+ rounds (hidden by default -- printed
+                  to a separate section so the main table is not
+                  polluted by players who are not in current rotation)
+
+    A player is also dropped from the main table if their `primary
+    team` does not match the team we are projecting them for (i.e. they
+    played more games for another club this season -- a data oddity
+    that previously caused the wrong-team slot-in bug).
+
+    If `team_selections` is provided AND covers the round we are
+    projecting, it ADJUSTS the buckets at the margins:
+      * A player NAMED in the 23 is promoted to LIKELY (overrides
+        STALE -- e.g. a player back from injury who hadn't played
+        for 5 rounds is now confirmed back).
+      * A player on the OUT list is moved to a separate OUT section
+        (and removed from the main table -- we know they aren't
+        playing this round).
+      * A player listed as EMERGENCY keeps their bucket but is tagged
+        [EMG] so you know they might come in late.
+      * Players not mentioned by the page (most players most weeks)
+        keep their existing bucket -- the page is treated as additive
+        info, never as ground truth on its own.
+    """
+    banner("STAGE 4  --  PROJECT  (next round disposal probabilities)")
+
+    rnd, fixtures = next_round(upcoming)
+    if rnd is None:
+        log("  no upcoming games on the fixture -- season complete.")
+        return
+
+    # Find games in the same round that have already been played.
+    # The fixture page puts these in `completed` (they have a result
+    # link) and their per-game data is in master via the cache.
+    mid_round_played = current_round_completed_games(completed or [], rnd)
+    n_played = len(mid_round_played)
+    n_upcoming = len(fixtures)
+    n_total = n_played + n_upcoming
+
+    log(f"  next round detected: ROUND {rnd}  "
+        f"({n_total} games total -- {n_played} played, "
+        f"{n_upcoming} upcoming)")
+
+    # If any games in this round have already been played, render the
+    # mid-round grading view BEFORE the upcoming-games projections.
+    # The snapshot is loaded fresh from disk -- it represents what we
+    # projected for this round before any of its games kicked off.
+    if mid_round_played:
+        snap_data = load_snapshot(rnd)
+        # Use the thresholds the snapshot was WRITTEN with (so an old
+        # 8-threshold snapshot displays correctly even after we widen
+        # the constant). Falls back to the live constant when no
+        # snapshot exists yet.
+        snap_thr = (snap_data.get("thresholds")
+                     if snap_data and snap_data.get("thresholds")
+                     else THRESHOLDS)
+        snap_thr = [int(t) for t in snap_thr]
+        _print_mid_round_grading(
+            rnd, mid_round_played, snap_data,
+            master, snap_thr, ROLE_ABBR)
+
+    profiles = build_distributions(master, roster=roster)
+    ladder = compute_ladder(master)
+    style = team_style_profile(master)
+    opp_fac = opponent_factors(master, ladder=ladder, style=style)
+    pace = team_pace(master)
+    roles = infer_roles(master)
+
+    # how recent does a player's last game need to be to count?
+    most_recent_round = max(p["last_round"] for p in profiles.values())
+    log(f"  most recent round in data: R{most_recent_round}")
+    LIKELY_GAP = 2     # last_round within 2 of most_recent_round
+    UNCERTAIN_GAP = 4
+    log(f"  classifying players: LIKELY <= {LIKELY_GAP} rounds ago, "
+        f"UNCERTAIN <= {UNCERTAIN_GAP}, STALE beyond.")
+
+    # Surface the mid-season-traded players (auto-detected from
+    # roster-vs-history mismatch). This list is GENERATED, not curated.
+    # A player appears here if their current roster team differs from
+    # any team they have 2026 game history for -- catching every real
+    # mid-season trade with no manual maintenance.
+    teams_in_round = set()
+    for fx in fixtures:
+        teams_in_round.add(fx["home"]); teams_in_round.add(fx["away"])
+    auto_trades = sorted(
+        (player, prof.get("prior_team") or "?", prof["team"])
+        for player, prof in profiles.items()
+        if prof.get("mid_season_traded") and prof["team"] in teams_in_round
+    )
+    log(f"  mid-season trades detected this round (NEW tag) -- "
+        f"{len(auto_trades)} players "
+        f"(auto-detected from roster + game history):")
+    for name, frm, to in auto_trades:
+        log(f"      {name:<22} {frm:<18} -> {to}")
+
+    # league-wide pressure summary so the user sees what's driving the
+    # opponent factors. Top 3 most/least defensive sides.
+    if style:
+        ranked = sorted(style.items(),
+                        key=lambda kv: -kv[1].get("pressure_index", 0.0))
+        log("  team defensive pressure (top 5):")
+        for t, s in ranked[:5]:
+            log(f"      {t:<18} pressure_z={s['pressure_index']:+.2f}  "
+                f"T={s['tackles']:.1f}  1%={s['one_pct']:.1f}  "
+                f"CM={s['contested_marks']:.1f}")
+        log("  team defensive pressure (bottom 5):")
+        for t, s in ranked[-5:]:
+            log(f"      {t:<18} pressure_z={s['pressure_index']:+.2f}  "
+                f"T={s['tackles']:.1f}  1%={s['one_pct']:.1f}  "
+                f"CM={s['contested_marks']:.1f}")
+
+    team_ctx = {}
+    for fx in fixtures:
+        team_ctx[fx["home"]] = (fx["away"], True, fx.get("venue", ""))
+        team_ctx[fx["away"]] = (fx["home"], False, fx.get("venue", ""))
+
+    # bucket players per team by recency bucket
+    by_team = defaultdict(lambda: {"likely": [], "uncertain": [],
+                                    "stale": []})
+    n_wrong_team = 0
+    for player, prof in profiles.items():
+        team = prof["team"]
+        if team not in team_ctx:
+            continue
+        # if a player's most recent game was NOT for their primary team,
+        # they have either moved or there is a data fault. Skip them
+        # from the main table -- the stale section will surface them.
+        opponent, is_home, venue = team_ctx[team]
+        travel = is_interstate(team, venue)
+        if prof["last_team"] != team:
+            n_wrong_team += 1
+            proj = project(prof, opp_fac.get(opponent, 1.0), is_home,
+                            travel_interstate=travel,
+                            pace_factor=pace.get(opponent, 1.0))
+            by_team[team]["stale"].append({
+                "player": player, "role": roles.get(player, "unknown"),
+                "games": prof["games"], "last_round": prof["last_round"],
+                "all_games": prof.get("all_games", prof["games"]),
+                "team_source": prof.get("team_source", "count"),
+                "mid_season_traded": prof.get("mid_season_traded", False),
+                "prior_team": prof.get("prior_team", None),
+                "season_avg_d": prof.get("season_avg_d", 0.0),
+                "reliability_index": prof.get("reliability_index", 0.0),
+                "mean": proj["adjusted_mu"],
+                "confidence": proj["confidence"],
+                "form_break": prof["form_break"],
+                "interstate": proj["interstate"],
+                "probs": proj["probs"],
+                "reason": f"last seen for {prof['last_team']}",
+            })
+            continue
+
+        proj = project(prof, opp_fac.get(opponent, 1.0), is_home,
+                        travel_interstate=travel,
+                        pace_factor=pace.get(opponent, 1.0))
+        gap = most_recent_round - prof["last_round"]
+        bucket = ("likely" if gap <= LIKELY_GAP
+                  else "uncertain" if gap <= UNCERTAIN_GAP
+                  else "stale")
+        by_team[team][bucket].append({
+            "player": player, "role": roles.get(player, "unknown"),
+            "games": prof["games"], "last_round": prof["last_round"],
+            "all_games": prof.get("all_games", prof["games"]),
+            "team_source": prof.get("team_source", "count"),
+            "mid_season_traded": prof.get("mid_season_traded", False),
+            "prior_team": prof.get("prior_team", None),
+            "season_avg_d": prof.get("season_avg_d", 0.0),
+            "reliability_index": prof.get("reliability_index", 0.0),
+            "mean": proj["adjusted_mu"],
+            "confidence": proj["confidence"],
+            "form_break": prof["form_break"],
+            "interstate": proj["interstate"],
+            "probs": proj["probs"],
+            "reason": "",
+        })
+
+    if n_wrong_team:
+        log(f"  flagged {n_wrong_team} players whose last game was for a "
+            f"different club (moved to STALE section).")
+
+    # Add an empty "out" bucket to every team. The team-selection
+    # integration may populate it; otherwise it stays empty.
+    for team in by_team:
+        by_team[team].setdefault("out", [])
+
+    # Build (team, display_name) <-> player_slug indexes from master.
+    # Used by both the team-selection adjustment AND the per-game
+    # lineup banner below. Building once, outside the conditional,
+    # keeps the data available whether or not selections were applied.
+    name_to_slug = {}
+    slug_to_name = {}      # (team, slug) -> "Display Name"
+    for r in master:
+        slug = (r.get("player_slug") or "").strip()
+        if slug and r.get("player") and r.get("team"):
+            name_to_slug[(r["team"], r["player"])] = slug
+            slug_to_name.setdefault((r["team"], slug), r["player"])
+
+    # ----------------------------------------------------------------
+    # TEAM-SELECTIONS INTEGRATION
+    # ----------------------------------------------------------------
+    # If the Footywire team-selections page was successfully fetched
+    # AND it covers the round we are projecting, fold its info into
+    # the buckets. Otherwise, skip silently -- the model is fine
+    # without it.
+    sel_used = False
+    sel_summary = {"named_promoted": 0, "moved_to_out": 0,
+                   "emergency_flagged": 0, "games_covered": 0}
+    # ts_by_game lets the per-game banner look up ins/outs for a
+    # specific home/away pair without re-iterating the full structure.
+    ts_by_game = {}
+    if team_selections and team_selections.get("round") == rnd:
+        # Build a (team, player_slug) -> status lookup.
+        # Precedence (highest first):  out > named > emergency
+        sel_status = {}
+        ts_games_for_round = []
+        for g in team_selections.get("games", []):
+            if g["home"] not in team_ctx and g["away"] not in team_ctx:
+                continue  # game not in our projected round
+            ts_games_for_round.append((g["home"], g["away"]))
+            ts_by_game[(g["home"], g["away"])] = g
+            for team, sel in [(g["home"], g["home_selections"]),
+                               (g["away"], g["away_selections"])]:
+                for slug in sel.get("out", []):
+                    sel_status[(team, slug)] = "out"
+                for slug in sel.get("named", []):
+                    sel_status.setdefault((team, slug), "named")
+                for slug in sel.get("emergency", []):
+                    sel_status.setdefault((team, slug), "emergency")
+        sel_summary["games_covered"] = len(ts_games_for_round)
+
+        if sel_status:
+            sel_used = True
+            # Walk every bucketed player and adjust.
+            for team in by_team:
+                player_buckets = by_team[team]
+                for bname in ("likely", "uncertain", "stale"):
+                    keep_in_bucket = []
+                    for row in player_buckets[bname]:
+                        slug = name_to_slug.get((team, row["player"]))
+                        if slug is None:
+                            keep_in_bucket.append(row)
+                            continue
+                        status = sel_status.get((team, slug))
+                        if status == "out":
+                            # Definitely not playing -- move to OUT.
+                            row["selection_status"] = "out"
+                            row["reason"] = (row["reason"] + " "
+                                              if row["reason"] else "") + \
+                                            "OUT per team selection"
+                            player_buckets["out"].append(row)
+                            sel_summary["moved_to_out"] += 1
+                            continue
+                        if status == "named":
+                            # Confirmed in the 23 -- promote to LIKELY
+                            # if currently stale, keep otherwise.
+                            row["selection_status"] = "named"
+                            if bname == "stale":
+                                player_buckets["likely"].append(row)
+                                sel_summary["named_promoted"] += 1
+                                continue
+                            # already in likely/uncertain: just tag
+                            keep_in_bucket.append(row)
+                            continue
+                        if status == "emergency":
+                            row["selection_status"] = "emergency"
+                            sel_summary["emergency_flagged"] += 1
+                            keep_in_bucket.append(row)
+                            continue
+                        keep_in_bucket.append(row)
+                    player_buckets[bname] = keep_in_bucket
+
+    if sel_used:
+        log(f"  applied team selections (Round {rnd}, "
+            f"{sel_summary['games_covered']} game(s) covered): "
+            f"{sel_summary['named_promoted']} STALE -> LIKELY (named), "
+            f"{sel_summary['moved_to_out']} -> OUT, "
+            f"{sel_summary['emergency_flagged']} flagged emergency")
+    elif team_selections and team_selections.get("round") not in (rnd, None):
+        log(f"  team selections page is for round "
+            f"{team_selections.get('round')}, not round {rnd} -- "
+            f"NOT applied (no adjustments).")
+    elif team_selections and team_selections.get("round") is None:
+        log("  team selections page was not parseable -- "
+            "NOT applied (no adjustments).")
+
+    # sort each bucket by P(lowest threshold) desc
+    low = THRESHOLDS[0]
+    for team in by_team:
+        for bucket in by_team[team]:
+            by_team[team][bucket].sort(
+                key=lambda r: r["probs"][low], reverse=True)
+
+    thr_head = "".join(f" +{t:<4}" for t in THRESHOLDS)
+    width = 50 + len(thr_head)
+
+    def _slug_to_display(team, slug):
+        """
+        Resolve a team-selections slug to the best human-readable name
+        we can produce. First try our master-data lookup; if absent
+        (debutant or fresh recruit), format the slug nicely with a
+        trailing * so the reader knows we couldn't verify them.
+        """
+        name = slug_to_name.get((team, slug))
+        if name:
+            return name
+        # "mabior-chol" -> "Mabior Chol*"; "alex-neal-bullen" ->
+        # "Alex Neal Bullen*"; the * flags an unmatched slug.
+        if not slug:
+            return "?"
+        pretty = " ".join(part.capitalize() for part in slug.split("-"))
+        return pretty + "*"
+
+    def _format_lineup_banner(team, selections):
+        """
+        Render a single team's IN / OUT line for the per-game banner.
+        Returns a list of log lines (1 or 2 depending on length).
+        Uses slug_to_name to convert slugs back to display names; an
+        asterisk * marks slugs we could not find in our master data
+        (typically debutants).
+        """
+        ins = sorted({_slug_to_display(team, s)
+                       for s in selections.get("in", [])})
+        outs = sorted({_slug_to_display(team, s)
+                        for s in selections.get("out", [])})
+        emg = sorted({_slug_to_display(team, s)
+                       for s in selections.get("emergency", [])})
+
+        lines = []
+        if ins or outs or emg:
+            lines.append(f"  {team:<18} "
+                         f"IN ({len(ins)}): "
+                         f"{', '.join(ins) if ins else '-'}")
+            lines.append(f"  {' ':<18} "
+                         f"OUT ({len(outs)}): "
+                         f"{', '.join(outs) if outs else '-'}")
+            if emg:
+                lines.append(f"  {' ':<18} "
+                             f"EMG ({len(emg)}): "
+                             f"{', '.join(emg)}")
+        else:
+            lines.append(f"  {team:<18} (no changes listed)")
+        return lines
+
+    def _print_player(r):
+        cf = {"high": "H", "med": "M", "low": "L"}[r["confidence"]]
+        cells = "".join(f" {r['probs'][t]:<5.2f}" for t in THRESHOLDS)
+        flags = ""
+        if r.get("form_break"):
+            flags += " *"
+        if r.get("interstate"):
+            flags += " T"          # T = interstate travel
+        # NEW = player has 2026 game history at a different club from
+        # their current roster team. This catches mid-season trades
+        # automatically -- no manual list to maintain or get wrong.
+        if r.get("mid_season_traded"):
+            flags += " NEW"
+        # NAMED / EMG from team-selections page (only set when the
+        # page covered this round; otherwise these stay None)
+        sel = r.get("selection_status")
+        if sel == "named":
+            flags += " NAMED"
+        elif sel == "emergency":
+            flags += " EMG"
+        role = ROLE_ABBR.get(r.get("role", "?"), "?")
+        # games column: show "used/total" when form-break trimming has
+        # discarded early games (e.g. "3/11" = 3 games used for baseline
+        # of 11 total played). When they match, show just the number for
+        # clarity. The * marker still flags form-break in the cf column.
+        used = r["games"]
+        total = r.get("all_games", used)
+        gms_str = f"{used}/{total}" if total != used else str(used)
+        # mean column: show "season-avg / projected" so a punter can see
+        # at a glance whether the projection is in line with the year's
+        # average or whether form-break / matchup adjustments have moved
+        # it. When the two are nearly identical, just print the projected
+        # value to keep the column readable.
+        season = r.get("season_avg_d", r["mean"])
+        proj = r["mean"]
+        if abs(season - proj) < 0.05:
+            mean_str = f"{proj:.1f}"
+        else:
+            mean_str = f"{season:.1f}/{proj:.1f}"
+        log(f"  {r['player']:<22}{role:>5}{gms_str:>6}"
+            f"{('R'+str(r['last_round'])):>5}{mean_str:>11}{cf:>4}"
+            f"{cells}{flags}")
+
+    # If we just printed mid-round grading, mark the start of the
+    # upcoming-games section so the visual split is unambiguous.
+    if mid_round_played:
+        log("")
+        log("=" * width)
+        log(f"  UPCOMING GAMES IN ROUND {rnd}  "
+            f"({n_upcoming} game(s) still to play)")
+        log("=" * width)
+
+    for fx in fixtures:
+        home, away = fx["home"], fx["away"]
+        log("")
+        log("=" * width)
+        log(f"  {home}  v  {away}    @ {fx['venue']}")
+        log("=" * width)
+
+        # Per-game lineup banner: IN / OUT / EMG for each team, drawn
+        # straight from the team-selections page. Shown only when the
+        # page covered this specific game; otherwise a clear note
+        # explains why.
+        ts_game = ts_by_game.get((home, away))
+        if ts_game:
+            for line in _format_lineup_banner(
+                    home, ts_game["home_selections"]):
+                log(line)
+            for line in _format_lineup_banner(
+                    away, ts_game["away_selections"]):
+                log(line)
+            log("  (* = slug from selections page not matched in our "
+                "master data, e.g. debutant)")
+            log("")
+        else:
+            if team_selections and team_selections.get("round") == rnd:
+                log("  (team selections for this specific game not yet "
+                    "released)")
+                log("")
+            # else: no selections page at all; no banner shown.
+
+        for side, team in (("HOME", home), ("AWAY", away)):
+            buckets = by_team.get(team,
+                                  {"likely": [], "uncertain": [],
+                                   "stale": [], "out": []})
+            n_likely = len(buckets["likely"])
+            n_unc = len(buckets["uncertain"])
+            n_stale = len(buckets["stale"])
+            n_out = len(buckets.get("out", []))
+            stat_str = (f"(likely:{n_likely}  uncertain:{n_unc}  "
+                        f"stale:{n_stale}")
+            if n_out:
+                stat_str += f"  out:{n_out}"
+            stat_str += ")"
+            log(f"\n  {side}: {team}   {stat_str}")
+            log(f"  {'player':<22}{'role':>5}{'gms':>6}{'last':>5}"
+                f"{'avg/proj':>11}{'cf':>4}{thr_head}")
+            log("  " + "-" * (width - 2))
+
+            if not buckets["likely"] and not buckets["uncertain"]:
+                log("  (no recent player data for this team)")
+
+            for r in buckets["likely"]:
+                _print_player(r)
+            if buckets["uncertain"]:
+                log("  --- UNCERTAIN  (3-4 rounds since last game) ---")
+                for r in buckets["uncertain"]:
+                    _print_player(r)
+            if buckets["stale"]:
+                log(f"  --- STALE  ({n_stale} players, "
+                    f"5+ rounds out or wrong-team flagged) ---")
+                # show only top 5 stale by mean -- the rest are noise
+                for r in buckets["stale"][:5]:
+                    extra = f"  [{r['reason']}]" if r["reason"] else ""
+                    _print_player(r)
+                    if extra:
+                        log(f"      {extra.strip()}")
+                if n_stale > 5:
+                    log(f"      ... and {n_stale - 5} more stale players "
+                        f"hidden")
+            # OUT section: only populated when team selections page
+            # was successfully read for this round
+            if buckets.get("out"):
+                log(f"  --- OUT  ({n_out} players, confirmed out per "
+                    f"team selections page) ---")
+                for r in buckets["out"]:
+                    _print_player(r)
+
+    log("")
+    log("  cf = confidence (H/M/L by games played).  "
+        "* = recent form-break detected.  T = interstate travel.")
+    log("  gms = games used for baseline (post form-break trim) / total")
+    log("        played in 2026.  Form-break cuts older games when a")
+    log("        player has clearly stepped up or down a level.")
+    log("  avg/proj = season-average disposals / projected for this game.")
+    log("        When the two diverge, form-break or matchup adjustments")
+    log("        have moved the projection off the season-long mean.")
+    log("  NEW = mid-season trade detected (player has 2026 game history")
+    log("        at a different club from their current roster team).")
+    log("        dict at the top of this script for the curated list.")
+    log("  NAMED = confirmed in the 23 per Footywire team selections.")
+    log("  EMG   = listed as emergency (subs in only on late withdrawal).")
+    log("  OUT section = players confirmed out per the selections page.")
+    log("  role: imid=inside mid, wbk=wing/half-back, kdef=key def, "
+        "kfwd=key fwd, sfwd=small fwd, ruc=ruck, gen=generalist.")
+    log("  last = round of player's most recent game.  "
+        "Trust LIKELY rows; treat")
+    log("  UNCERTAIN as 'might play'; STALE rows are players not in")
+    log("  current rotation -- shown for transparency, not for betting.")
+    log("  Values = P(disposals >= X).  Baseline prior only -- check")
+    log("  team selection and bookmaker odds before acting.")
+
+    # Return a structured snapshot of what we projected. This is what
+    # Stage 5 grades against actuals when the round completes.
+    snapshot = {
+        "round": rnd,
+        "fixtures": [{"home": fx["home"], "away": fx["away"],
+                       "venue": fx.get("venue", "")}
+                      for fx in fixtures],
+        "thresholds": list(THRESHOLDS),
+        "players": [],
+    }
+    for team, buckets in by_team.items():
+        for bucket_name in ("likely", "uncertain", "stale", "out"):
+            for r in buckets.get(bucket_name, []):
+                snapshot["players"].append({
+                    "player": r["player"],
+                    "team": team,
+                    "team_source": r.get("team_source", "count"),
+                    "bucket": bucket_name,
+                    "role": r["role"],
+                    "games": r["games"],
+                    "all_games": r.get("all_games", r["games"]),
+                    "last_round": r["last_round"],
+                    "season_avg_d": round(r.get("season_avg_d", 0.0), 2),
+                    "reliability_index": round(
+                        r.get("reliability_index", 0.0), 3),
+                    "mean": round(r["mean"], 2),
+                    "confidence": r["confidence"],
+                    "form_break": r["form_break"],
+                    "interstate": r["interstate"],
+                    "is_new": r.get("mid_season_traded", False),
+                    "prior_team": r.get("prior_team"),
+                    # selection_status is "named"/"emergency"/"out" if
+                    # the team-selections page was applied; otherwise
+                    # absent. A Streamlit app can render this directly.
+                    "selection_status": r.get("selection_status"),
+                    "probs": {str(t): round(r["probs"][t], 4)
+                              for t in THRESHOLDS},
+                })
+    return snapshot
+
+
+# ==========================================================================
+# SECTION 7b  --  SNAPSHOTS  &  STAGE 5: REVIEW
+# ==========================================================================
+# A snapshot is the structured Stage 4 output frozen to disk at the
+# MOMENT the round was first projected -- before any of its games were
+# played. Later, when those games complete, Stage 5 grades the
+# snapshot against the actuals in the master CSV.
+#
+# Why save the snapshot:
+#   * the model's projections evolve every week as new data lands. To
+#     honestly grade what the model said BEFORE the round, we have to
+#     freeze it.
+#   * the first run that produces a snapshot for round N keeps it;
+#     re-runs do not overwrite. So your audit trail is permanent and
+#     reflects the FIRST time you projected each round.
+#
+# File layout:
+#   predictions/round_11.json
+#   predictions/round_12.json
+#   ...
+
+
+def _snapshot_path(round_num):
+    """Where on disk the snapshot for a given round lives."""
+    return os.path.join(PREDICTIONS_DIR, f"round_{round_num:02d}.json")
+
+
+def save_snapshot(snapshot):
+    """
+    Write a Stage 4 snapshot to predictions/round_NN.json.
+
+    If a snapshot for that round already exists we do NOT overwrite it
+    -- the first projection is the punter-relevant one. Returns True if
+    a new file was written, False if one already existed.
+    """
+    if snapshot is None or "round" not in snapshot:
+        return False
+    os.makedirs(PREDICTIONS_DIR, exist_ok=True)
+    path = _snapshot_path(snapshot["round"])
+    if os.path.exists(path):
+        return False
+    payload = {
+        "round": snapshot["round"],
+        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "fixtures": snapshot["fixtures"],
+        "thresholds": snapshot["thresholds"],
+        "players": snapshot["players"],
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    return True
+
+
+def load_snapshot(round_num):
+    """Load a saved snapshot dict, or None if not present / corrupted."""
+    path = _snapshot_path(round_num)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _actuals_for_round(master, round_num):
+    """
+    Build {(player, team): actual_disposals} for every completed game
+    in the given round. A round is 'completed' from the model's
+    perspective when its games appear in the master CSV.
+    """
+    actuals = {}
+    for r in master:
+        try:
+            if int(r.get("round", -1)) == round_num:
+                actuals[(r["player"], r["team"])] = int(r.get("D", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return actuals
+
+
+def stage5_review(master):
+    """
+    For every saved snapshot whose round is now completed in the master
+    data, grade what we projected against what actually happened.
+
+    Returns a dict:
+      {
+        "rounds_graded": int,
+        "rounds_waiting": [int, ...],
+        "season": { "n_predictions", "brier", "log_loss",
+                    "calibration_error", "calibration_table" },
+        "per_round": [ {round, n_graded, brier, mae, players: [...]} ]
+      }
+
+    Returns None if no snapshots exist at all (nothing to grade).
+    """
+    banner("STAGE 5  --  REVIEW  (graded projections vs actuals)")
+
+    if not os.path.isdir(PREDICTIONS_DIR):
+        log(f"  no snapshots yet (no {PREDICTIONS_DIR}/ folder).")
+        log("  this stage will start producing review data once at least")
+        log("  one round has been projected AND completed.")
+        return None
+
+    # find every round we have a snapshot for
+    snap_files = sorted(
+        f for f in os.listdir(PREDICTIONS_DIR)
+        if f.startswith("round_") and f.endswith(".json"))
+    if not snap_files:
+        log(f"  {PREDICTIONS_DIR}/ exists but holds no snapshots yet.")
+        return None
+
+    completed_rounds = {int(r.get("round", -1)) for r in master
+                         if str(r.get("round", "")).isdigit()}
+
+    all_preds = []        # (p, y) pairs across every reviewed round
+    rounds_graded = 0
+    rounds_waiting = []
+    per_round_results = []
+
+    for fname in snap_files:
+        try:
+            round_num = int(fname.split("_")[1].split(".")[0])
+        except (IndexError, ValueError):
+            continue
+        snap = load_snapshot(round_num)
+        if snap is None:
+            log(f"  could not read {fname} -- skipped")
+            continue
+
+        if round_num not in completed_rounds:
+            rounds_waiting.append(round_num)
+            continue
+
+        actuals = _actuals_for_round(master, round_num)
+        if not actuals:
+            rounds_waiting.append(round_num)
+            continue
+
+        rounds_graded += 1
+        round_summary = _grade_one_round(snap, actuals, all_preds)
+        if round_summary is not None:
+            per_round_results.append(round_summary)
+
+    # season rolling scorecard (also stored for Streamlit)
+    season_brier = _brier(all_preds) if all_preds else None
+    season_loss = _log_loss(all_preds) if all_preds else None
+    season_ce = _calibration_error(all_preds) if all_preds else None
+    season_cal_table = [
+        {"bucket": label, "count": count,
+         "predicted": mp, "actual": ac,
+         "gap": (mp - ac) if (mp is not None and ac is not None) else None}
+        for label, count, mp, ac in _calibration(all_preds)
+    ] if all_preds else []
+
+    log("")
+    log("=" * 72)
+    log(f"  SEASON SCORECARD  --  {rounds_graded} round(s) graded, "
+        f"{len(all_preds):,} predictions scored")
+    log("=" * 72)
+    if all_preds:
+        log(f"  Brier             : {season_brier:.4f}")
+        log(f"  Log loss          : {season_loss:.4f}")
+        log(f"  Calibration error : {season_ce:.4f}")
+        log("")
+        log("  CALIBRATION  (rolling across all reviewed rounds)")
+        log(f"    {'bucket':<13}{'count':>8}{'predicted':>11}"
+            f"{'actual':>9}{'gap':>9}")
+        for row in season_cal_table:
+            if row["count"] == 0:
+                log(f"    {row['bucket']:<13}{row['count']:>8}"
+                    f"{'--':>11}{'--':>9}{'--':>9}")
+            else:
+                # same rule as stage 3: small buckets (<100) are noisy
+                # by chance, so flag them visually but distinctly from
+                # genuinely-off calibration.
+                if row["count"] < 100:
+                    flag = "  (small n)" if abs(row["gap"]) > 0.10 else ""
+                else:
+                    flag = "  <-- off" if abs(row["gap"]) > 0.10 else ""
+                log(f"    {row['bucket']:<13}{row['count']:>8}"
+                    f"{row['predicted']:>11.3f}{row['actual']:>9.3f}"
+                    f"{row['gap']:>+9.3f}{flag}")
+        log("  '(small n)' = bucket too small to trust the gap; the")
+        log("  overall calibration error above is the honest summary.")
+    if rounds_waiting:
+        log("")
+        log(f"  Snapshots awaiting actuals (round not yet completed): "
+            f"{sorted(rounds_waiting)}")
+    if not rounds_graded:
+        log("  (no graded rounds yet -- save a snapshot and let the round")
+        log("   complete; this stage will then produce real scorecards.)")
+
+    return {
+        "rounds_graded": rounds_graded,
+        "rounds_waiting": sorted(rounds_waiting),
+        "season": {
+            "n_predictions": len(all_preds),
+            "brier": season_brier,
+            "log_loss": season_loss,
+            "calibration_error": season_ce,
+            "calibration_table": season_cal_table,
+        },
+        "per_round": per_round_results,
+    }
+
+
+def _grade_one_round(snap, actuals, all_preds):
+    """
+    Grade one round against its actuals. Appends (p, y) tuples to
+    all_preds. Prints a per-round table.
+
+    Returns a dict summary for the round:
+      {round, n_graded, n_missing, mae, brier, calibration_error,
+       players: [{player, team, proj, actual, probs}]}
+    """
+    round_num = snap["round"]
+    thresholds = [int(t) for t in snap.get("thresholds", THRESHOLDS)]
+    grade_thr = [t for t in (22, 26, 30) if t in thresholds]   # report cols
+
+    log("")
+    log("-" * 72)
+    log(f"  ROUND {round_num}  --  graded against actuals "
+        f"({len(actuals)} player-games on record)")
+    log("-" * 72)
+
+    # we only grade LIKELY-bucket projections -- they are what the
+    # model said the punter should trust. STALE/UNCERTAIN players who
+    # ended up playing get a note rather than full scoring.
+    likely = [p for p in snap["players"] if p["bucket"] == "likely"]
+    likely.sort(key=lambda p: -p["mean"])
+
+    header_thr = "".join(f" P>={t}".ljust(8) for t in grade_thr)
+    actual_h = "  D  "
+    hits_h = "".join(f"  {t}+".ljust(6) for t in grade_thr)
+    log(f"  {'player':<22}{'team':<14}{'proj':>5}{header_thr}{actual_h}"
+        f"{hits_h}")
+
+    round_preds = []
+    player_results = []
+    n_played = n_missing = 0
+    abs_err_sum = 0.0
+    for p in likely:
+        actual = actuals.get((p["player"], p["team"]))
+        if actual is None:
+            n_missing += 1
+            continue
+        n_played += 1
+        abs_err_sum += abs(actual - p["mean"])
+        thr_cells = "".join(
+            f" {float(p['probs'][str(t)]):.2f}  ".ljust(8) for t in grade_thr)
+        hit_cells = "".join(
+            ("  Y  " if actual >= t else "  -  ").ljust(6)
+            for t in grade_thr)
+        log(f"  {p['player']:<22}{p['team']:<14}{p['mean']:>5.1f}"
+            f"{thr_cells} {actual:>3d} {hit_cells}")
+        player_results.append({
+            "player": p["player"],
+            "team": p["team"],
+            "proj_mean": p["mean"],
+            "actual": actual,
+            "probs": {str(t): float(p["probs"].get(str(t), 0))
+                       for t in thresholds},
+        })
+        # record (p, y) for every threshold this snapshot carries
+        for t in thresholds:
+            try:
+                prob = float(p["probs"][str(t)])
+            except (KeyError, TypeError, ValueError):
+                continue
+            y = 1 if actual >= t else 0
+            round_preds.append((prob, y))
+            all_preds.append((prob, y))
+
+    if n_missing:
+        log(f"  ({n_missing} LIKELY players in snapshot did not play this")
+        log(f"   round -- expected, since each club's snapshot lists "
+            f"~30 senior")
+        log(f"   players but only 22 are selected per game.)")
+
+    mae = abs_err_sum / max(n_played, 1) if n_played else None
+    brier = _brier(round_preds) if round_preds else None
+    ce = _calibration_error(round_preds) if round_preds else None
+
+    if round_preds:
+        log(f"  graded {n_played} players, "
+            f"mean abs error vs projected = {mae:.2f} disposals")
+        log(f"  round Brier = {brier:.4f}  "
+            f"calibration error = {ce:.4f}")
+
+    return {
+        "round": round_num,
+        "n_graded": n_played,
+        "n_missing": n_missing,
+        "mae": mae,
+        "brier": brier,
+        "calibration_error": ce,
+        "players": player_results,
+    }
+
+
+# ==========================================================================
+# SECTION 8  --  PIPELINE ENTRY POINTS
+# ==========================================================================
+#
+# Two entry points are provided:
+#
+#   run_pipeline(opts)  -- the workhorse. Runs every stage and returns a
+#                          single dict containing every structured
+#                          result. This is the function a future
+#                          Streamlit app should call. The CLI prints
+#                          still happen as a side-effect; if you want
+#                          to silence them, capture stdout when calling.
+#
+#   main()              -- the CLI wrapper. Parses argv, calls
+#                          run_pipeline, exits. This is what runs when
+#                          you do `py afl_model.py`.
+#
+# The returned dict from run_pipeline has this shape:
+#
+#   {
+#     "master":   [ row, row, ... ],          # every player-game row
+#     "upcoming": [ fixture, ... ],           # next-round fixtures
+#     "completed":[ game_dict, ... ],         # already-played games
+#     "snapshot": { ... } or None,            # this round's projections
+#     "backtest": { ... } or None,            # Stage 3 result dict
+#     "review":   { ... } or None,            # Stage 5 result dict
+#     "ladder":   { team: position, ... },
+#     "style":    { team: {...}, ... },       # pressure/tackles per team
+#     "pace":     { team: float, ... },
+#     "trades":   TRADES_2026,                # surfaced for UI
+#     "thresholds": [18,20,22,...],
+#     "constants": { ... tuning knobs ... },  # so a UI can show them
+#   }
+#
+# A Streamlit page can then do, for example:
+#     from afl_model import run_pipeline
+#     r = run_pipeline()
+#     st.dataframe(r["master"])
+#     for fx in r["snapshot"]["fixtures"]: ...
+#     st.line_chart(r["review"]["per_round"])
+#
+# No further restructuring needed.
+
+
+class PipelineOptions:
+    """Mirror of the CLI args but constructable in code (e.g. from
+    Streamlit). All fields have defaults so a UI can call
+    run_pipeline(PipelineOptions()) with zero setup."""
+
+    def __init__(self, limit=0, delay=1.0, strict=False, refresh=False,
+                 skip_backtest=False, min_history=3,
+                 variance_inflation=None):
+        self.limit = limit
+        self.delay = delay
+        self.strict = strict
+        self.refresh = refresh
+        self.skip_backtest = skip_backtest
+        self.min_history = min_history
+        self.variance_inflation = variance_inflation
+
+
+def run_pipeline(opts=None):
+    """
+    Run the whole pipeline and return all structured results.
+
+    This is the function a future Streamlit (or any other consumer)
+    should call. It does the same work as main() but exposes every
+    intermediate result as a return value instead of only printing.
+
+    Args:
+      opts: a PipelineOptions instance (defaults to all defaults).
+
+    Returns:
+      A dict with every structured pipeline output, or None if the
+      scrape produced no data (no games yet this season).
+    """
+    if opts is None:
+        opts = PipelineOptions()
+
+    # honor variance inflation override
+    if opts.variance_inflation is not None:
+        global VARIANCE_INFLATION
+        VARIANCE_INFLATION = opts.variance_inflation
+
+    started = time.time()
+    banner("AFL 2026  --  DISPOSAL PROJECTION PIPELINE")
+    if not HAVE_TQDM:
+        log("  (tqdm not installed -- no progress bar. "
+            "pip install tqdm for one.)")
+
+    session = requests.Session()
+
+    # STAGE 1 -- scrape (also fetches team-selections page + roster)
+    (all_basic, all_adv, upcoming, completed,
+     team_selections, roster) = stage1_scrape(session, opts)
+    if not all_basic:
+        log("\nNo data scraped -- cannot continue.")
+        return None
+
+    # STAGE 2 -- merge (returns master in-memory; no CSV side effect)
+    master = stage2_merge(all_basic, all_adv, opts)
+
+    # STAGE 3 -- backtest (returns structured results or None if skipped)
+    if opts.skip_backtest:
+        banner("STAGE 3  --  BACKTEST  (skipped: --skip-backtest)")
+        backtest_result = None
+    else:
+        backtest_result = stage3_backtest(master, opts)
+
+    # Compute team-level analytics ONCE so we can stash them in the
+    # result dict and also reuse them inside Stage 4. These are the
+    # team views a Streamlit app would want (ladder, defensive style,
+    # pace) without having to recompute them.
+    ladder_data = compute_ladder(master)
+    style_data = team_style_profile(master)
+    pace_data = team_pace(master)
+
+    # STAGE 4 -- project (returns the snapshot dict).
+    # Roster is passed so traded players get attributed to their CURRENT
+    # club, regardless of how their game history splits across teams.
+    snapshot = stage4_project(master, upcoming, completed=completed,
+                                team_selections=team_selections,
+                                roster=roster)
+
+    # Snapshot the round's projections so Stage 5 can grade them
+    # later. The first run for a round writes the file; subsequent
+    # runs never overwrite it (the punter-relevant projection is the
+    # one made BEFORE the games were played).
+    if snapshot:
+        if save_snapshot(snapshot):
+            log(f"\n  Saved this round's projections to "
+                f"{_snapshot_path(snapshot['round'])}")
+            log("  Stage 5 will grade them once the round is completed.")
+        else:
+            log(f"\n  Snapshot for round {snapshot['round']} already "
+                f"exists -- preserving the original.")
+
+    # STAGE 5 -- review every snapshot whose round is now completed
+    review_result = stage5_review(master)
+
+    banner(f"PIPELINE COMPLETE  ({time.time() - started:.1f}s)")
+    log(f"  cache          : {CACHE_FILE}")
+    log(f"  snapshots      : {PREDICTIONS_DIR}/")
+    log("")
+
+    return {
+        "master": master,
+        "upcoming": upcoming,
+        "completed": completed,
+        "snapshot": snapshot,
+        "backtest": backtest_result,
+        "review": review_result,
+        "ladder": ladder_data,
+        "style": style_data,
+        "pace": pace_data,
+        # Auto-detected mid-season trades, derived from the snapshot.
+        # Each entry: {player, from, to}. Empty if no mid-season trades.
+        "trades": [
+            {"player": p["player"],
+             "from": p.get("prior_team") or "?",
+             "to": p["team"]}
+            for p in snapshot.get("players", [])
+            if p.get("is_new")
+        ],
+        "team_selections": _serialise_team_selections(team_selections),
+        "roster_size": len(roster) if roster else 0,
+        "thresholds": list(THRESHOLDS),
+        "constants": {
+            "recency_decay": RECENCY_DECAY,
+            "venue_shrinkage": VENUE_SHRINKAGE,
+            "opponent_shrinkage": OPPONENT_SHRINKAGE,
+            "variance_inflation": VARIANCE_INFLATION,
+            "ladder_weight": LADDER_WEIGHT,
+            "pressure_weight": PRESSURE_WEIGHT,
+            "emp_weight": EMP_WEIGHT,
+            "interstate_travel_factor": INTERSTATE_TRAVEL_FACTOR,
+            "high_cp_variance_dampening": HIGH_CP_VARIANCE_DAMPENING,
+            "use_reliability_damping": USE_RELIABILITY_DAMPING,
+            "reliability_variance_floor": RELIABILITY_VARIANCE_FLOOR,
+            "pace_factor_scale": PACE_FACTOR_SCALE,
+        },
+    }
+
+# ════════════════════════════════════════════════════════════════════════════
+# END OF INLINED DISPOSAL MODEL
+# ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
+# DISPOSAL PROJECTION MODEL — consumer-side glue (Streamlit cache + render)
+# ════════════════════════════════════════════════════════════════════════════
+# Pulls the projected disposal distribution for each player in the upcoming
+# round from the NB pipeline inlined above. The pipeline returns a `snapshot`
+# dict whose `players` list contains every player with team, role, mean
+# projection, and P(disposals >= X) at a fixed set of thresholds.
+#
+# Three design choices worth flagging:
+#
+# 1) CACHING. The pipeline scrapes footywire end-to-end on first invocation
+#    (~5 min cold start, near-instant once cached). We wrap it in
+#    @st.cache_data with a 6h TTL so the first user of a session pays the
+#    cost and every subsequent rerun reuses the result. skip_backtest=True
+#    cuts another ~30s off cold-start because we don't surface calibration
+#    metrics in this app — they're irrelevant once the model is trusted.
+#
+# 2) TEAM-NAME BRIDGE. The disposal pipeline uses short canonical names
+#    ("Brisbane", "GWS") while this app uses the full names ("Brisbane
+#    Lions", "GWS Giants"). DISPOSAL_MODEL_TEAM_NAME maps app→pipeline so
+#    any place in the app that already has a canonical app name can look
+#    up the right pipeline name in one step.
+#
+# 3) FAILURE MODE. Every entry point catches Exception and returns an empty
+#    dict. A footywire outage or a pipeline bug must never break the game
+#    cards — the disposal block hides itself when there's no data, exactly
+#    the same pattern render_h2h_block uses for its own missing-data case.
+
+# Canonical app name → name the disposal model uses internally.
+# Only 2 mappings actually differ (Brisbane Lions → Brisbane, GWS Giants →
+# GWS); the rest are identity mappings, declared explicitly so a new club
+# being added to the app and not here surfaces as a missing-key bug
+# rather than a silent miss in the disposal block.
+DISPOSAL_MODEL_TEAM_NAME = {
+    "Adelaide":         "Adelaide",
+    "Brisbane Lions":   "Brisbane",
+    "Carlton":          "Carlton",
+    "Collingwood":      "Collingwood",
+    "Essendon":         "Essendon",
+    "Fremantle":        "Fremantle",
+    "Geelong":          "Geelong",
+    "Gold Coast":       "Gold Coast",
+    "GWS Giants":       "GWS",
+    "Hawthorn":         "Hawthorn",
+    "Melbourne":        "Melbourne",
+    "North Melbourne":  "North Melbourne",
+    "Port Adelaide":    "Port Adelaide",
+    "Richmond":         "Richmond",
+    "St Kilda":         "St Kilda",
+    "Sydney":           "Sydney",
+    "West Coast":       "West Coast",
+    "Western Bulldogs": "Western Bulldogs",
+}
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_disposal_projections():
+    """
+    Run the disposal pipeline and return its snapshot, or an empty dict on
+    any failure. Cached for 6 hours so first user of a session warms it and
+    every game card afterwards is a dict lookup.
+
+    Returns a dict with at least:
+      round       (int)           the round projected
+      fixtures    (list)          [{home, away, venue}, ...] for that round
+      thresholds  (list[int])     disposal cutoffs used (16..34)
+      players     (list[dict])    one entry per player (see run_pipeline)
+    Or {} if the scrape failed, or there are no upcoming games.
+    """
+    try:
+        # delay=0.5 halves cold-start time vs. default 1.0s between requests
+        # and footywire tolerates it fine. skip_backtest=True drops Stage 3
+        # since we surface only projections, not calibration metrics.
+        opts = PipelineOptions(
+            delay=0.5,
+            skip_backtest=True,
+        )
+        result = run_pipeline(opts)
+        if not result:
+            return {}
+        snapshot = result.get("snapshot") or {}
+        return snapshot
+    except Exception:
+        # Any failure — network, parse, model — degrades to no disposal block.
+        return {}
+
+
+def build_disposal_lookup(snapshot):
+    """
+    Reshape the flat snapshot["players"] list into
+        {model_team_name: [player_row, ...]}
+    where each list is sorted by projected mean disposals DESC.
+    Pre-sorting once is much cheaper than re-sorting inside every game card.
+
+    Keeps LIKELY players (played in last 2 rounds) and UNCERTAIN players
+    (played 3-4 rounds ago — possibly back from injury). Drops STALE
+    (5+ rounds out, not in rotation) and confirmed OUT players, since
+    those won't take the field this round.
+
+    Returns ({}, []) if the snapshot is empty, otherwise (by_team, thresholds).
+    """
+    if not snapshot:
+        return {}, []
+    thresholds = [int(t) for t in snapshot.get("thresholds") or []]
+    players = snapshot.get("players") or []
+    by_team = defaultdict(list)
+    for p in players:
+        # Drop STALE (rotation absentees) and explicit OUTs. UNCERTAIN
+        # players are kept — they might be back, and showing them gives
+        # the punter the full picture of who could play.
+        if p.get("bucket") in ("out", "stale"):
+            continue
+        if p.get("selection_status") == "out":
+            continue
+        by_team[p["team"]].append(p)
+    # Sort each team's list by projected mean desc — that's the "biggest
+    # ball-winner" view the punter actually wants.
+    for team, plist in by_team.items():
+        plist.sort(key=lambda r: r.get("mean", 0), reverse=True)
+    return dict(by_team), thresholds
+
+
+def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
+                          player_id_lookup=None):
+    """
+    Build the per-game disposal-projection HTML block. Returns "" if data
+    for this match is missing, so it hides itself cleanly inside a game
+    card — same convention render_h2h_block uses for its own no-data case.
+
+    Layout: one row per player.
+        [headshot] [name + flags] [season avg] [projected μ]  ≥16 .. ≥34
+
+    Every player a team might field is shown — no LIKELY/UNCERTAIN
+    sections, no top-edge callout, no edge ladder. Just the raw model
+    output presented in a dense, scannable Bloomberg-style table.
+
+    Scroll behaviour:
+        • The panel grows VERTICALLY to fit every player — no inner
+          scroll, so the user scrolls the page like with any other
+          content. This is what the punter asked for: "don't make
+          the table move".
+        • Horizontally the bucket columns can overflow the viewport
+          (10 thresholds × 44px ≈ 440px just for the buckets, which
+          won't fit a narrow card on phone). When they don't fit,
+          horizontal scroll engages so the buckets stay intact rather
+          than getting compressed or hidden.
+    """
+    if not by_team or not thresholds:
+        return ""
+
+    home_model = DISPOSAL_MODEL_TEAM_NAME.get(home_app_name)
+    away_model = DISPOSAL_MODEL_TEAM_NAME.get(away_app_name)
+    if not home_model or not away_model:
+        return ""
+
+    home_players = by_team.get(home_model, [])
+    away_players = by_team.get(away_model, [])
+    if not home_players and not away_players:
+        return ""
+
+    # All thresholds the model carries — punter explicitly asked for the
+    # full 16..34 range, sorted ascending so columns read left-to-right
+    # from "everyone clears this" (16) to "elite only" (34).
+    show_thresholds = sorted(set(thresholds))
+    threshold_keys = [str(t) for t in show_thresholds]
+
+    # Team identity — same helpers used by every other panel in the app.
+    home_c = canonical(home_app_name)
+    away_c = canonical(away_app_name)
+    home_accent = team_accent(home_c)
+    away_accent = team_accent(away_c)
+    home_abbr_s = TEAM_ABBR.get(home_c, home_c[:3].upper())
+    away_abbr_s = TEAM_ABBR.get(away_c, away_c[:3].upper())
+    home_logo = TEAM_LOGOS.get(home_c, "")
+    away_logo = TEAM_LOGOS.get(away_c, "")
+
+    # ── Headshot ── reuses h2h_headshot_url + disc-with-initials-fallback
+    # pattern. Initials sit behind the img and become visible the moment
+    # the img is hidden by an onerror handler.
+    def _initials(name):
+        parts = (name or "").strip().split()
+        if not parts:
+            return "?"
+        first = parts[0][:1].upper()
+        if len(parts) >= 2:
+            last = parts[-1].split("-")[0][:1].upper()
+            return f"{first}{last}"
+        return first
+
+    def _shot_html(player_name):
+        url = h2h_headshot_url(player_name, player_id_lookup) if player_id_lookup else None
+        initials = _initials(player_name)
+        if url:
+            return (
+                f'<span class="mc-disp-shot">'
+                f'<span class="mc-disp-shot-initials">{initials}</span>'
+                f'<img class="mc-disp-shot-img" src="{url}" alt="" '
+                f'loading="lazy" onerror="this.style.display=\'none\'" />'
+                f'</span>'
+            )
+        return (
+            f'<span class="mc-disp-shot mc-disp-shot-fallback">'
+            f'<span class="mc-disp-shot-initials">{initials}</span>'
+            f'</span>'
+        )
+
+    # Probability colour tiers — three actionable bands, a neutral
+    # coin-flip band, and a dim noise floor:
+    #   * 90%+  → green  (lock)   "this is happening"
+    #   * 70-89 → blue   (edge)   "lean strongly"
+    #   * 51-69 → amber  (warm)   "coin flip with a tilt toward yes"
+    #   * 48-50 → grey   (flip)   "genuine coin flip, no signal"
+    #   * <48   → dim    (text3)  "noise, skip"
+    #
+    # The 'flip' band is deliberately narrow (48-50 inclusive). Anything
+    # right around 50% means the model has no view either way — colouring
+    # those cells amber would over-signal them. Grey says honestly:
+    # "we don't know". A punter scanning the panel skips grey cells the
+    # same way they skip dim ones, which is the correct read.
+    # These tiers drive both per-cell glow AND the per-row background
+    # tint, so a punter scanning the panel sees coloured rows for the
+    # actionable players before they parse a single digit.
+    def _prob_tier(p):
+        if p >= 0.90: return "lock"
+        if p >= 0.70: return "edge"
+        if p >= 0.51: return "warm"
+        if p >= 0.48: return "flip"
+        return "dim"
+
+    # Conviction tier driven by the PROJECTED MEAN, not by individual
+    # probability cells. Used to colour the headshot ring + row tint
+    # so the punter knows at a glance "this player is projected for a
+    # big day" before reading any number.
+    #   * >= 28 disp → green ring  "ball-magnet, projected elite"
+    #   * >= 22 disp → blue ring   "solid mid, will get touches"
+    #   * >= 18 disp → amber ring  "role player, some involvement"
+    #   * <  18 disp → dim ring    "fringe / low-touch role"
+    def _conviction_tier(mu):
+        if mu >= 28: return "lock"
+        if mu >= 22: return "edge"
+        if mu >= 18: return "warm"
+        return "dim"
+
+    def _player_row(p, team_accent_col, row_i):
+        name = p["player"]
+        mean = p.get("mean", 0)
+        season_avg = p.get("season_avg_d", 0)
+
+        # The player's conviction tier drives BOTH the row's faint
+        # background tint AND the headshot's coloured ring. Same tier
+        # name as the prob cells so all three visual signals (row,
+        # ring, cells) sing in the same colour vocabulary.
+        conv_tier = _conviction_tier(mean)
+
+        # Inline flags — same vocabulary as the model's console output.
+        # Sel tags (NAMED/EMG/UNC) carry the team-list status info.
+        flag_bits = []
+        if p.get("form_break"):
+            flag_bits.append('<span class="mc-disp-flag mc-disp-flag-form" title="Recent form break detected">*</span>')
+        if p.get("interstate"):
+            flag_bits.append('<span class="mc-disp-flag mc-disp-flag-trav" title="Interstate travel">T</span>')
+        sel = p.get("selection_status")
+        if sel == "named":
+            flag_bits.append('<span class="mc-disp-sel mc-disp-sel-named">NAMED</span>')
+        elif sel == "emergency":
+            flag_bits.append('<span class="mc-disp-sel mc-disp-sel-emg">EMG</span>')
+        if p.get("bucket") == "uncertain":
+            flag_bits.append('<span class="mc-disp-sel mc-disp-sel-unc" title="3-4 rounds since last game — may return">UNC</span>')
+        flags_html = "".join(flag_bits)
+
+        prob_cells = []
+        for k in threshold_keys:
+            pr = float(p.get("probs", {}).get(k, 0.0))
+            pct = int(round(pr * 100))
+            tier = _prob_tier(pr)
+            prob_cells.append(
+                f'<span class="mc-disp-cell mc-disp-prob mc-disp-prob-{tier}">'
+                f'{pct}<small>%</small></span>'
+            )
+
+        # Form-delta indicator: when the model's projection diverges
+        # meaningfully from the player's season average, surface that
+        # delta as a coloured chip next to μ. 2.0 disposals is the
+        # threshold below which the divergence is noise (sample size,
+        # matchup variance, etc) and not worth flagging.
+        # ▲ green = matchup favours them above baseline
+        # ▼ red   = matchup hurts them below baseline
+        # Format the delta to one decimal place — same precision as
+        # the AVG/μ cells, so the eye can pattern-match the digits.
+        delta = mean - season_avg
+        if season_avg > 0 and abs(delta) >= 2.0:
+            if delta > 0:
+                delta_html = (
+                    f'<span class="mc-disp-delta mc-disp-delta-up" '
+                    f'title="Projected {delta:+.1f} above season average">'
+                    f'▲{delta:+.1f}</span>'
+                )
+            else:
+                delta_html = (
+                    f'<span class="mc-disp-delta mc-disp-delta-down" '
+                    f'title="Projected {delta:+.1f} below season average">'
+                    f'▼{delta:+.1f}</span>'
+                )
+        else:
+            delta_html = ''
+
+        # Pass conv_tier into both the row (for bg tint) and the shot
+        # wrapper (for the ring). Doing it via data-conviction attr
+        # rather than another class avoids a combinatorial explosion
+        # of .mc-disp-row.mc-disp-row-lock etc; one selector pattern
+        # in the CSS handles all four tiers.
+        return (
+            f'<div class="mc-disp-row" data-conviction="{conv_tier}" '
+            f'     style="--team-accent:{team_accent_col}; --row-i:{row_i};">'
+            f'  <span class="mc-disp-cell mc-disp-cell-shot" data-conviction="{conv_tier}">'
+            f'    {_shot_html(name)}'
+            f'  </span>'
+            f'  <span class="mc-disp-cell mc-disp-cell-name">'
+            f'    <span class="mc-disp-name">{name}</span>'
+            f'    {flags_html}'
+            f'  </span>'
+            f'  <span class="mc-disp-cell mc-disp-cell-avg">{season_avg:.1f}</span>'
+            f'  <span class="mc-disp-cell mc-disp-cell-mean">'
+            f'    {mean:.1f}{delta_html}'
+            f'  </span>'
+            f'  {"".join(prob_cells)}'
+            f'</div>'
+        )
+
+    threshold_header_cells = "".join(
+        f'<span class="mc-disp-cell mc-disp-prob-h">≥{t}</span>'
+        for t in show_thresholds
+    )
+
+    def _team_section(team_app_name, team_abbr_s_, accent, logo, players):
+        """Team banner (chip + player count) + column header + rows.
+        Empty teams render a quiet placeholder so the banner is still
+        visible — punter knows the team exists, just no data."""
+        logo_html = f'<img src="{logo}" class="mc-disp-sect-logo" />' if logo else ''
+        banner = (
+            f'<div class="mc-disp-sect-banner" style="--team-accent:{accent};">'
+            f'  <div class="mc-disp-sect-l">'
+            f'    {logo_html}'
+            f'    <span class="mc-disp-sect-abbr">{team_abbr_s_}</span>'
+            f'    <span class="mc-disp-sect-team">{team_app_name}</span>'
+            f'  </div>'
+            f'  <div class="mc-disp-sect-r">'
+            f'    <span class="mc-disp-sect-count">{len(players)}</span>'
+            f'    <span class="mc-disp-sect-count-lbl">PLAYERS</span>'
+            f'  </div>'
+            f'</div>'
+        )
+        if not players:
+            return banner + (
+                '<div class="mc-disp-empty">Player pool not seen recently enough</div>'
+            )
+        column_header = (
+            '<div class="mc-disp-colhead">'
+            '  <span class="mc-disp-cell mc-disp-cell-shot"></span>'
+            '  <span class="mc-disp-cell mc-disp-cell-name">PLAYER</span>'
+            '  <span class="mc-disp-cell mc-disp-cell-avg">AVG</span>'
+            '  <span class="mc-disp-cell mc-disp-cell-mean">μ</span>'
+            f'  {threshold_header_cells}'
+            '</div>'
+        )
+        rows_html = "".join(
+            _player_row(p, accent, i) for i, p in enumerate(players)
+        )
+        return banner + column_header + rows_html
+
+    home_section = _team_section(home_app_name, home_abbr_s, home_accent,
+                                  home_logo, home_players)
+    away_section = _team_section(away_app_name, away_abbr_s, away_accent,
+                                  away_logo, away_players)
+
+    # Threshold-picking helper: snaps a target value (e.g. 22) to the
+    # nearest available threshold in the model's actual threshold set.
+    # The model carries [16,18,20,22,24,26,28,30,32,34], so _pick(22)
+    # returns 22 directly; _pick(25) would return 24 (closer than 26).
+    # Used by the match-stats and top-edge logic below to anchor their
+    # aggregates to specific real thresholds without hard-coding.
+    def _pick(target):
+        return min(show_thresholds, key=lambda t: abs(t - target))
+
+    # ── MATCH STATS BANNER ──
+    # One-line summary across BOTH teams: how many actionable cells
+    # exist in this game and who the top μ projection is. Sits at the
+    # very top of the open panel so a punter who only has 3 seconds
+    # gets the headline before scanning any row.
+    #
+    # We count using P(>=22) which is the "they'll have a decent game"
+    # threshold — well above the noise floor (everyone clears 16, most
+    # clear 18-20) but achievable enough that the counts stay meaningful.
+    # If we used P(>=30) every game would show 1-2 locks max; using
+    # P(>=22) gives genuine separation between high-edge games (where
+    # both teams have lots of high-output players) and low-edge games.
+    all_match_players = list(home_players) + list(away_players)
+    stat_threshold_key = str(_pick(22))  # "they'll have a decent game"
+    stat_threshold_val = _pick(22)
+
+    locks_n = sum(1 for p in all_match_players
+                  if float(p.get("probs", {}).get(stat_threshold_key, 0)) >= 0.90)
+    edges_n = sum(1 for p in all_match_players
+                  if 0.70 <= float(p.get("probs", {}).get(stat_threshold_key, 0)) < 0.90)
+    warms_n = sum(1 for p in all_match_players
+                  if 0.50 <= float(p.get("probs", {}).get(stat_threshold_key, 0)) < 0.70)
+
+    # Find the highest-μ player across both teams — that's the "top
+    # ball-magnet" of the match, the punter's most likely 30+ bet.
+    if all_match_players:
+        top_mu_player = max(all_match_players, key=lambda p: p.get("mean", 0))
+        top_mu_name = top_mu_player["player"]
+        top_mu_val = top_mu_player.get("mean", 0)
+        # Which team — colour the chip accordingly via the team accent.
+        top_mu_team = top_mu_player.get("team", "")
+        top_mu_accent = (home_accent if top_mu_team == home_model
+                         else away_accent)
+        top_mu_abbr = (home_abbr_s if top_mu_team == home_model
+                       else away_abbr_s)
+    else:
+        top_mu_name = None
+
+    match_stats_html = (
+        '<div class="mc-disp-stats-banner">'
+        '<div class="mc-disp-stats-grp">'
+        '<div class="mc-disp-stats-counts">'
+        f'<span class="mc-disp-stats-count mc-disp-stats-count-lock">'
+        f'<span class="mc-disp-stats-n">{locks_n}</span>'
+        f'<span class="mc-disp-stats-lbl">LOCKS</span></span>'
+        f'<span class="mc-disp-stats-count mc-disp-stats-count-edge">'
+        f'<span class="mc-disp-stats-n">{edges_n}</span>'
+        f'<span class="mc-disp-stats-lbl">EDGES</span></span>'
+        f'<span class="mc-disp-stats-count mc-disp-stats-count-warm">'
+        f'<span class="mc-disp-stats-n">{warms_n}</span>'
+        f'<span class="mc-disp-stats-lbl">WARM</span></span>'
+        '</div>'
+        f'<span class="mc-disp-stats-sub">@ ≥{stat_threshold_val} disposals</span>'
+        '</div>'
+    )
+    if top_mu_name:
+        match_stats_html += (
+            '<div class="mc-disp-stats-top">'
+            '<span class="mc-disp-stats-top-lbl">TOP μ</span>'
+            f'<span class="mc-disp-stats-top-team" '
+            f'      style="color:{top_mu_accent};">{top_mu_abbr}</span>'
+            f'<span class="mc-disp-stats-top-name">{top_mu_name}</span>'
+            f'<span class="mc-disp-stats-top-val">{top_mu_val:.1f}</span>'
+            '</div>'
+        )
+    match_stats_html += '</div>'
+
+    # ── TOP EDGE CALLOUT CARDS ──
+    # Three highest-P(>=30) players in the game, shown as standout cards
+    # at the top of the panel. Answers the punter's first question:
+    # "who's the safest 30+ bet here?" before they read any row.
+    #
+    # Each card carries: rank chip, headshot (with the same conviction
+    # ring as the row below), name+team chip, projected μ, and the two
+    # headline probability cells (>=26 and >=30) sized for impact.
+    #
+    # Only renders if at least one player has P(>=30) >= 50% — otherwise
+    # this isn't a high-edge game and showing dim cards would just clutter.
+    t30_key = str(_pick(30))
+    t26_key = str(_pick(26))
+    t30_val = _pick(30)
+    t26_val = _pick(26)
+    top_edge_pool = sorted(all_match_players,
+                            key=lambda p: float(p.get("probs", {}).get(t30_key, 0)),
+                            reverse=True)
+    top_3 = top_edge_pool[:3]
+    has_real_edge = (top_3 and
+                     float(top_3[0].get("probs", {}).get(t30_key, 0)) >= 0.50)
+
+    if has_real_edge:
+        edge_cards = []
+        for rank, p in enumerate(top_3, 1):
+            ep_name = p["player"]
+            ep_mu = p.get("mean", 0)
+            ep_team = p.get("team", "")
+            ep_accent = (home_accent if ep_team == home_model else away_accent)
+            ep_abbr = (home_abbr_s if ep_team == home_model else away_abbr_s)
+            ep_conv = _conviction_tier(ep_mu)
+            p30 = float(p.get("probs", {}).get(t30_key, 0))
+            p26 = float(p.get("probs", {}).get(t26_key, 0))
+            pct30 = int(round(p30 * 100))
+            pct26 = int(round(p26 * 100))
+            tier30 = _prob_tier(p30)
+            tier26 = _prob_tier(p26)
+            edge_cards.append(
+                f'<div class="mc-disp-edge-card" data-conviction="{ep_conv}" '
+                f'     style="--team-accent:{ep_accent};">'
+                f'  <div class="mc-disp-edge-rank">#{rank}</div>'
+                f'  <div class="mc-disp-edge-shot" data-conviction="{ep_conv}">'
+                f'    {_shot_html(ep_name)}'
+                f'  </div>'
+                f'  <div class="mc-disp-edge-info">'
+                f'    <div class="mc-disp-edge-name">{ep_name}</div>'
+                f'    <div class="mc-disp-edge-meta">'
+                f'      <span class="mc-disp-edge-team" style="color:{ep_accent};">{ep_abbr}</span>'
+                f'      <span class="mc-disp-edge-sep">·</span>'
+                f'      <span class="mc-disp-edge-mu">μ {ep_mu:.1f}</span>'
+                f'    </div>'
+                f'  </div>'
+                f'  <div class="mc-disp-edge-probs">'
+                f'    <div class="mc-disp-edge-prob mc-disp-edge-prob-primary mc-disp-prob-{tier30}">'
+                f'      <div class="mc-disp-edge-prob-num">{pct30}<small>%</small></div>'
+                f'      <div class="mc-disp-edge-prob-lbl">≥{t30_val}</div>'
+                f'    </div>'
+                f'    <div class="mc-disp-edge-prob mc-disp-edge-prob-secondary mc-disp-prob-{tier26}">'
+                f'      <div class="mc-disp-edge-prob-num">{pct26}<small>%</small></div>'
+                f'      <div class="mc-disp-edge-prob-lbl">≥{t26_val}</div>'
+                f'    </div>'
+                f'  </div>'
+                f'</div>'
+            )
+        top_edge_html = (
+            '<div class="mc-disp-edge-strip">'
+            '<div class="mc-disp-edge-strip-head">'
+            '<span class="mc-disp-edge-strip-glyph">◆</span>'
+            '<span class="mc-disp-edge-strip-title">Top Edge</span>'
+            f'<span class="mc-disp-edge-strip-sub">highest P(≥{t30_val}) in match</span>'
+            '</div>'
+            f'<div class="mc-disp-edge-cards">{"".join(edge_cards)}</div>'
+            '</div>'
+        )
+    else:
+        top_edge_html = ''
+
+    foot = (
+        '<div class="mc-disp-foot">'
+        '<div class="mc-disp-foot-tiers">'
+        '<span class="mc-disp-foot-tier mc-disp-foot-tier-lock">90%+</span>'
+        '<span class="mc-disp-foot-tier mc-disp-foot-tier-edge">70-89</span>'
+        '<span class="mc-disp-foot-tier mc-disp-foot-tier-warm">51-69</span>'
+        '<span class="mc-disp-foot-tier mc-disp-foot-tier-flip">48-50</span>'
+        '<span class="mc-disp-foot-tier mc-disp-foot-tier-dim">&lt;48</span>'
+        '</div>'
+        '<div class="mc-disp-foot-meta">'
+        '<span class="mc-disp-foot-item">AVG · season</span>'
+        '<span class="mc-disp-foot-item">μ · projected</span>'
+        '<span class="mc-disp-foot-item">cells = P(disposals ≥ threshold)</span>'
+        '<span class="mc-disp-foot-item"><span class="mc-disp-flag mc-disp-flag-form">*</span> form break</span>'
+        '<span class="mc-disp-foot-item"><span class="mc-disp-flag mc-disp-flag-trav">T</span> interstate</span>'
+        '<span class="mc-disp-foot-item"><span class="mc-disp-sel mc-disp-sel-named">NAMED</span> in 23</span>'
+        '<span class="mc-disp-foot-item"><span class="mc-disp-sel mc-disp-sel-unc">UNC</span> may return</span>'
+        '</div>'
+        '</div>'
+    )
+
+    return _h(f"""
+    <details class="mc-disp-disclosure">
+      <summary class="mc-disp-summary">
+        <span class="mc-disp-sum-title">Player Disposals Predictor</span>
+        <span class="mc-disp-sum-chevron">›</span>
+      </summary>
+      <div class="mc-disp-body">
+        {match_stats_html}
+        {top_edge_html}
+        <div class="mc-disp-hscroll">
+          <div class="mc-disp-table">
+            {home_section}
+            {away_section}
+          </div>
+        </div>
+        {foot}
+      </div>
+    </details>
+    """)
+
+
+# Disposal-block styling — every player on the squad, every disposal
+# threshold from 16 to 34 in one row. Dense, scannable, Bloomberg-grade.
+#
+# Key behaviours:
+#   • NO internal vertical scroll. The panel grows to fit. User scrolls
+#     the page like normal — what the punter explicitly asked for.
+#   • HORIZONTAL scroll when the threshold columns don't fit the viewport
+#     width. 10 thresholds × 44px is ~440px just for buckets, and once
+#     headshot + name + AVG + μ are added the table needs ~720px. On a
+#     narrow card this overflows, so the .mc-disp-hscroll container
+#     scrolls sideways. Vertical layout is untouched.
+#   • TABULAR NUMERALS, RIGHT-ALIGNED. Probabilities line up across all
+#     rows in a team's section so down-column comparison is instant.
+#   • SIGNAL COLOUR, NOT DECORATION. Cells colour only when they carry
+#     actionable signal (90%+ green, 70-89% accent blue). Quiet cells
+#     stay neutral.
+#
+# All colours pull from the master <style> block elsewhere in this file
+# so palette drift is impossible.
+st.markdown("""
+<style>
+/* ── DISCLOSURE WRAPPER ─────────────────────────────────────────────── */
+.mc-disp-disclosure{
+  margin:6px 14px 4px;
+  border:1px solid var(--border);
+  background:transparent;
+  border-radius:6px;
+  font-family:var(--mono);
+  position:relative;
+  transition:border-color 0.22s ease, background 0.22s ease;
+  /* overflow:hidden lets the inner table corners follow the border-radius
+     cleanly when the panel opens. Without it the sticky-positioned scroll
+     wrapper bleeds past the rounded corner on its top edge. */
+  overflow:hidden;
+}
+.mc-disp-disclosure:hover{
+  border-color:rgba(167,139,250,0.22);
+}
+.mc-disp-disclosure[open]{
+  border-color:rgba(167,139,250,0.34);
+  background:linear-gradient(180deg,
+    color-mix(in srgb, var(--bg2) 55%, transparent),
+    var(--bg2));
+}
+.mc-disp-disclosure > summary{list-style:none;}
+.mc-disp-disclosure > summary::-webkit-details-marker{display:none;}
+.mc-disp-disclosure > summary::marker{display:none; content:'';}
+.mc-disp-summary{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:9px 12px;
+  cursor:pointer; user-select:none;
+  -webkit-tap-highlight-color:transparent;
+  list-style:none;
+  min-height:36px;
+  transition:padding 0.22s ease;
+}
+.mc-disp-summary::-webkit-details-marker{display:none;}
+.mc-disp-summary:focus-visible{
+  outline:1px solid var(--accent2);
+  outline-offset:-2px;
+  border-radius:5px;
+}
+.mc-disp-sum-title{
+  font-size:0.54rem; font-weight:700;
+  letter-spacing:0.18em; text-transform:uppercase;
+  color:var(--text2);
+  line-height:1;
+  transition:color 0.22s ease;
+}
+.mc-disp-disclosure:hover .mc-disp-sum-title,
+.mc-disp-disclosure[open] .mc-disp-sum-title{color:var(--white);}
+.mc-disp-sum-chevron{
+  font-size:0.78rem; font-weight:300;
+  color:var(--text3);
+  line-height:1;
+  display:inline-block;
+  transform:rotate(0deg);
+  transition:transform 0.28s ease, color 0.22s ease;
+  opacity:0.7;
+}
+.mc-disp-disclosure:hover .mc-disp-sum-chevron{color:var(--accent2); opacity:1;}
+.mc-disp-disclosure[open] .mc-disp-sum-chevron{
+  transform:rotate(90deg);
+  color:var(--accent2);
+  opacity:1;
+}
+
+/* ── BODY ───────────────────────────────────────────────────────────── */
+.mc-disp-body{
+  padding:0;
+  background:transparent;
+  border-top:1px solid rgba(167,139,250,0.18);
+  animation:mc-disp-fade-in 0.32s ease both;
+}
+@keyframes mc-disp-fade-in{
+  from{opacity:0; transform:translateY(-3px);}
+  to{opacity:1; transform:translateY(0);}
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   MATCH STATS BANNER — first row in the open panel
+   ══════════════════════════════════════════════════════════════════════
+   A one-line headline that summarises the whole match at a glance:
+   how many LOCKS / EDGES / WARM cells exist at the @ ≥22 threshold,
+   and who the top μ player in the game is. Lets a punter who only
+   has 3 seconds answer "is this game worth a deeper look?" without
+   reading any row. */
+.mc-disp-stats-banner{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:14px;
+  padding:11px 14px;
+  background:linear-gradient(180deg,
+    rgba(79,143,255,0.04) 0%,
+    transparent 100%);
+  border-bottom:1px solid var(--border);
+  animation:mc-disp-banner-in 0.42s ease-out both;
+}
+@keyframes mc-disp-banner-in{
+  from{opacity:0; transform:translateY(-2px);}
+  to{opacity:1; transform:translateY(0);}
+}
+.mc-disp-stats-grp{
+  display:flex; align-items:center; gap:10px;
+  flex-wrap:wrap;
+}
+.mc-disp-stats-counts{
+  display:flex; align-items:center; gap:8px;
+}
+.mc-disp-stats-count{
+  display:inline-flex; align-items:baseline; gap:4px;
+  padding:3px 8px 4px;
+  border-radius:4px;
+  font-family:var(--mono);
+  /* Tier styling pulled from the same palette as the prob cells —
+     so "LOCKS" reads visually as the same green you see in the
+     90%+ probability tiles below. */
+}
+.mc-disp-stats-n{
+  font-size:0.92rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+  letter-spacing:0;
+}
+.mc-disp-stats-lbl{
+  font-size:0.48rem; font-weight:700;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  opacity:0.85;
+}
+.mc-disp-stats-count-lock{
+  background:rgba(52,211,153,0.08);
+  box-shadow:inset 0 0 0 1px rgba(52,211,153,0.30);
+  color:var(--green);
+  text-shadow:0 0 8px rgba(52,211,153,0.40);
+}
+.mc-disp-stats-count-edge{
+  background:rgba(79,143,255,0.07);
+  box-shadow:inset 0 0 0 1px rgba(79,143,255,0.28);
+  color:var(--accent);
+  text-shadow:0 0 6px rgba(79,143,255,0.35);
+}
+.mc-disp-stats-count-warm{
+  background:rgba(251,191,36,0.07);
+  box-shadow:inset 0 0 0 1px rgba(251,191,36,0.28);
+  color:var(--amber);
+  text-shadow:0 0 5px rgba(251,191,36,0.32);
+}
+.mc-disp-stats-sub{
+  font-family:var(--mono);
+  font-size:0.46rem; font-weight:600;
+  letter-spacing:0.10em;
+  text-transform:uppercase;
+  color:var(--text3);
+}
+.mc-disp-stats-top{
+  display:flex; align-items:center; gap:7px;
+  font-family:var(--mono);
+}
+.mc-disp-stats-top-lbl{
+  font-size:0.46rem; font-weight:700;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  color:var(--text3);
+}
+.mc-disp-stats-top-team{
+  font-size:0.62rem; font-weight:800;
+  letter-spacing:0.06em;
+}
+.mc-disp-stats-top-name{
+  font-size:0.6rem; font-weight:700;
+  color:var(--white);
+}
+.mc-disp-stats-top-val{
+  font-size:0.66rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  color:var(--green);
+  text-shadow:0 0 6px rgba(52,211,153,0.40);
+  padding:2px 6px;
+  border-radius:3px;
+  background:rgba(52,211,153,0.08);
+  box-shadow:inset 0 0 0 1px rgba(52,211,153,0.22);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   TOP EDGE STRIP — three cards across the panel
+   ══════════════════════════════════════════════════════════════════════
+   The three highest-confidence P(≥30) picks in the match, surfaced as
+   standout cards above the full roster. This is the "what do I bet?"
+   headline — a punter reads these first, then drops into the table for
+   the supporting picture. Only renders when there's a real edge in the
+   game (top pick ≥50% for ≥30 disposals); games with no real edge get
+   no callout, no false signal. */
+.mc-disp-edge-strip{
+  padding:12px 14px 14px;
+  border-bottom:1px solid var(--border);
+  /* No background — let the cards themselves carry the visual weight
+     against the panel's bg2 wash. */
+}
+.mc-disp-edge-strip-head{
+  display:flex; align-items:center; gap:8px;
+  margin-bottom:10px;
+}
+.mc-disp-edge-strip-glyph{
+  color:var(--accent);
+  font-size:0.6rem;
+  /* Subtle pulse so the glyph reads as "live signal" rather than static
+     decoration. 3s loop, very gentle — never distracting. */
+  filter:drop-shadow(0 0 4px rgba(79,143,255,0.55));
+  animation:mc-disp-glyph-pulse 3.6s ease-in-out infinite;
+}
+@keyframes mc-disp-glyph-pulse{
+  0%, 100%{opacity:0.9; filter:drop-shadow(0 0 3px rgba(79,143,255,0.45));}
+  50%{opacity:1; filter:drop-shadow(0 0 7px rgba(79,143,255,0.75));}
+}
+.mc-disp-edge-strip-title{
+  font-family:var(--mono);
+  font-size:0.58rem; font-weight:800;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+  color:var(--white);
+}
+.mc-disp-edge-strip-sub{
+  font-family:var(--mono);
+  font-size:0.46rem; font-weight:600;
+  letter-spacing:0.10em;
+  text-transform:uppercase;
+  color:var(--text3);
+}
+.mc-disp-edge-cards{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:10px;
+}
+/* ── EDGE CARD ──
+   Per-pick card with rank chip, headshot (carrying the conviction ring),
+   name+team meta block, and two prominent probability tiles (≥30 as
+   the headline, ≥26 as supporting). The team's accent colour runs as
+   a 2px stripe on the left edge so each card visually belongs to its
+   team without needing logo chrome. */
+.mc-disp-edge-card{
+  display:grid;
+  grid-template-columns:auto 40px 1fr auto;
+  align-items:center;
+  gap:9px;
+  padding:9px 11px;
+  background:var(--card);
+  border:1px solid var(--border);
+  border-left:2px solid var(--team-accent);
+  border-radius:5px;
+  transition:transform 0.22s ease, border-color 0.22s ease,
+             box-shadow 0.22s ease, background 0.22s ease;
+  animation:mc-disp-card-in 0.5s ease-out both;
+}
+.mc-disp-edge-card:nth-child(1){animation-delay:0.05s;}
+.mc-disp-edge-card:nth-child(2){animation-delay:0.13s;}
+.mc-disp-edge-card:nth-child(3){animation-delay:0.21s;}
+@keyframes mc-disp-card-in{
+  from{opacity:0; transform:translateY(4px);}
+  to{opacity:1; transform:translateY(0);}
+}
+.mc-disp-edge-card:hover{
+  transform:translateY(-2px);
+  border-color:color-mix(in srgb, var(--team-accent) 50%, var(--border));
+  box-shadow:
+    0 4px 16px rgba(0,0,0,0.35),
+    0 0 12px color-mix(in srgb, var(--team-accent) 18%, transparent);
+}
+.mc-disp-edge-rank{
+  font-family:var(--mono);
+  font-size:0.6rem; font-weight:800;
+  letter-spacing:0.04em;
+  color:var(--team-accent);
+  line-height:1;
+  /* Subtle vertical bar look — feels like a stock-ticker rank chip */
+  padding:0 2px;
+}
+/* The edge card's headshot reuses the same .mc-disp-shot disc as
+   the rows below. The wrapping .mc-disp-edge-shot uses the same
+   data-conviction trick so the ring colour matches the conviction
+   tier (defined in the existing .mc-disp-cell-shot[data-conviction]
+   rules). Sized slightly larger (40px) for impact in the card. */
+.mc-disp-edge-shot{
+  display:inline-flex;
+  width:40px; height:40px;
+}
+.mc-disp-edge-shot .mc-disp-shot{
+  width:40px; height:40px;
+}
+.mc-disp-edge-shot .mc-disp-shot-initials{
+  font-size:0.62rem;
+}
+/* Apply the same conviction-ring colour treatment as the row-level
+   .mc-disp-cell-shot — but matching on .mc-disp-edge-shot too, so
+   the same data-conviction attr drives both contexts. */
+.mc-disp-edge-shot[data-conviction="lock"] .mc-disp-shot{
+  background:radial-gradient(circle at 50% 35%,
+    rgba(52,211,153,0.22) 0%,
+    rgba(52,211,153,0.04) 55%,
+    rgba(52,211,153,0) 100%);
+  border:1px solid rgba(52,211,153,0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(52,211,153,0.10),
+    0 0 8px rgba(52,211,153,0.35);
+}
+.mc-disp-edge-shot[data-conviction="edge"] .mc-disp-shot{
+  background:radial-gradient(circle at 50% 35%,
+    rgba(79,143,255,0.20) 0%,
+    rgba(79,143,255,0.04) 55%,
+    rgba(79,143,255,0) 100%);
+  border:1px solid rgba(79,143,255,0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(79,143,255,0.10),
+    0 0 7px rgba(79,143,255,0.30);
+}
+.mc-disp-edge-shot[data-conviction="warm"] .mc-disp-shot{
+  background:radial-gradient(circle at 50% 35%,
+    rgba(251,191,36,0.18) 0%,
+    rgba(251,191,36,0.04) 55%,
+    rgba(251,191,36,0) 100%);
+  border:1px solid rgba(251,191,36,0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(251,191,36,0.10),
+    0 0 6px rgba(251,191,36,0.28);
+}
+.mc-disp-edge-info{
+  display:flex; flex-direction:column;
+  gap:3px;
+  min-width:0;
+}
+.mc-disp-edge-name{
+  font-family:var(--mono);
+  font-size:0.62rem; font-weight:700;
+  color:var(--white);
+  letter-spacing:0.01em;
+  line-height:1.15;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.mc-disp-edge-meta{
+  display:flex; align-items:center; gap:5px;
+  font-family:var(--mono);
+  font-size:0.48rem; font-weight:600;
+  letter-spacing:0.04em;
+  line-height:1;
+}
+.mc-disp-edge-team{
+  font-weight:800;
+}
+.mc-disp-edge-sep{color:var(--text3); opacity:0.5;}
+.mc-disp-edge-mu{
+  color:var(--text2);
+  font-variant-numeric:tabular-nums;
+}
+.mc-disp-edge-probs{
+  display:flex; gap:7px;
+}
+.mc-disp-edge-prob{
+  display:flex; flex-direction:column;
+  align-items:flex-end;
+  gap:2px;
+  padding:3px 6px;
+  border-radius:3px;
+}
+.mc-disp-edge-prob-num{
+  font-family:var(--mono);
+  font-weight:800;
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+}
+.mc-disp-edge-prob-num small{
+  font-size:0.58em;
+  opacity:0.65;
+  margin-left:1px;
+  font-weight:500;
+}
+.mc-disp-edge-prob-lbl{
+  font-family:var(--mono);
+  font-size:0.4rem; font-weight:700;
+  letter-spacing:0.10em;
+  color:var(--text3);
+}
+.mc-disp-edge-prob-primary .mc-disp-edge-prob-num{font-size:0.86rem;}
+.mc-disp-edge-prob-secondary .mc-disp-edge-prob-num{font-size:0.7rem;}
+/* The edge-prob tiles reuse the same .mc-disp-prob-lock/edge/warm/dim
+   classes as the row cells, so palette + glow are inherited
+   automatically — no duplication, palette can never drift. */
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORM-DELTA CHIP — appears inside the μ cell when projection diverges
+   2+ disposals from season average. Tells the punter "the model is
+   moving this player off their baseline" without forcing them to
+   mentally subtract AVG from μ across 30 rows.
+   ══════════════════════════════════════════════════════════════════════ */
+.mc-disp-delta{
+  display:inline-block;
+  margin-left:5px;
+  padding:0 4px 1px;
+  font-family:var(--mono);
+  font-size:0.5rem; font-weight:800;
+  letter-spacing:0.02em;
+  border-radius:2px;
+  line-height:1.4;
+  vertical-align:1px;
+  font-variant-numeric:tabular-nums;
+  cursor:help;
+}
+.mc-disp-delta-up{
+  color:var(--green);
+  background:rgba(52,211,153,0.08);
+  box-shadow:inset 0 0 0 1px rgba(52,211,153,0.28);
+  text-shadow:0 0 4px rgba(52,211,153,0.40);
+}
+.mc-disp-delta-down{
+  color:#f87171;  /* warm red — distinct from the amber warm-tier */
+  background:rgba(248,113,113,0.08);
+  box-shadow:inset 0 0 0 1px rgba(248,113,113,0.30);
+  text-shadow:0 0 4px rgba(248,113,113,0.40);
+}
+
+/* Mobile tightening for the new components ─────────────────────────── */
+@media (max-width:560px){
+  .mc-disp-stats-banner{
+    flex-direction:column;
+    align-items:flex-start;
+    gap:8px;
+    padding:9px 11px;
+  }
+  .mc-disp-stats-n{font-size:0.78rem;}
+  .mc-disp-stats-top{flex-wrap:wrap;}
+  .mc-disp-edge-cards{
+    grid-template-columns:1fr;
+    gap:7px;
+  }
+  .mc-disp-edge-strip{padding:10px 11px 11px;}
+  .mc-disp-edge-card{padding:8px 9px;}
+  .mc-disp-edge-shot{width:34px; height:34px;}
+  .mc-disp-edge-shot .mc-disp-shot{width:34px; height:34px;}
+  .mc-disp-edge-prob-primary .mc-disp-edge-prob-num{font-size:0.74rem;}
+  .mc-disp-edge-prob-secondary .mc-disp-edge-prob-num{font-size:0.62rem;}
+  .mc-disp-delta{font-size:0.44rem; padding:0 3px 1px;}
+}
+
+/* ── HORIZONTAL SCROLL CONTAINER ──
+   No vertical scroll — the punter wants the table to grow to fit, not
+   trap content behind an inner scrollbar. Horizontal scroll engages
+   when the threshold columns don't fit the viewport width. */
+/* Horizontal scroll container.
+   Critical for mobile UX: 90% of users are on phones where the panel
+   width is ~360px but the table needs ~720px to show all 10 thresholds.
+   The user MUST be able to swipe sideways through the bucket columns.
+
+   Three properties make the touch-swipe feel native:
+     • -webkit-overflow-scrolling:touch — momentum scrolling on iOS
+       Safari (without this, swipes stop abruptly when the finger lifts)
+     • touch-action:pan-x — tells the browser "I handle horizontal
+       pans, let vertical pans bubble up to the page scroll". Without
+       this, iOS Safari sometimes gets confused on diagonal swipes
+       and locks neither axis.
+     • overscroll-behavior-x:contain — when the user reaches the end
+       of the horizontal scroll, the swipe doesn't bleed into the
+       browser's back/forward gesture (huge on iOS where edge-swipe
+       triggers history nav).
+
+   The right-edge fade gradient (via the ::after pseudo) gives a visual
+   "more content this way" hint when the table is wider than its
+   container. It hides on mobile only when scrolled to the end. */
+.mc-disp-hscroll{
+  position:relative;
+  overflow-x:auto;
+  overflow-y:visible;
+  overscroll-behavior-x:contain;
+  -webkit-overflow-scrolling:touch;
+  touch-action:pan-x;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,0.12) transparent;
+}
+.mc-disp-hscroll::-webkit-scrollbar{height:6px;}
+.mc-disp-hscroll::-webkit-scrollbar-track{background:transparent;}
+.mc-disp-hscroll::-webkit-scrollbar-thumb{
+  background:rgba(255,255,255,0.10);
+  border-radius:3px;
+}
+.mc-disp-hscroll::-webkit-scrollbar-thumb:hover{
+  background:rgba(255,255,255,0.20);
+}
+
+/* The table itself is sized to its natural grid width. width:max-content
+   means rows can extend past the viewport, which is exactly what we
+   want — the hscroll container above shows a horizontal scrollbar
+   when that happens. */
+.mc-disp-table{
+  width:max-content;
+  min-width:100%;
+}
+
+/* ── TEAM SECTION BANNER ──
+   One per team. NOT sticky — the punter said "don't make the table
+   move". Banner just sits where it is and the user scrolls past it. */
+.mc-disp-sect-banner{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 14px;
+  background:linear-gradient(90deg,
+    color-mix(in srgb, var(--team-accent) 12%, var(--card)) 0%,
+    var(--card) 100%);
+  border-bottom:1px solid var(--border2);
+  border-left:3px solid var(--team-accent);
+  /* width:100% locks the banner to the viewport so it never extends
+     into the horizontal scroll zone — it's a section divider, not
+     part of the scrollable table. */
+  position:sticky;
+  left:0;
+  width:max-content;
+  min-width:100%;
+  box-sizing:border-box;
+}
+.mc-disp-sect-l{
+  display:flex; align-items:center; gap:8px;
+}
+.mc-disp-sect-logo{
+  width:20px; height:20px;
+  object-fit:contain;
+  filter:drop-shadow(0 0 4px color-mix(in srgb, var(--team-accent) 40%, transparent));
+}
+.mc-disp-sect-abbr{
+  font-family:var(--mono);
+  font-size:0.72rem; font-weight:800;
+  letter-spacing:0.06em;
+  color:var(--team-accent);
+  line-height:1;
+}
+.mc-disp-sect-team{
+  font-family:var(--mono);
+  font-size:0.52rem; font-weight:600;
+  letter-spacing:0.02em;
+  color:var(--text);
+  line-height:1;
+}
+.mc-disp-sect-r{
+  display:flex; align-items:baseline; gap:4px;
+}
+.mc-disp-sect-count{
+  font-family:var(--mono);
+  font-size:0.66rem; font-weight:800;
+  color:var(--white);
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+}
+.mc-disp-sect-count-lbl{
+  font-family:var(--mono);
+  font-size:0.44rem; font-weight:600;
+  letter-spacing:0.14em; text-transform:uppercase;
+  color:var(--text3);
+}
+
+/* ── COLUMN HEADER + PLAYER ROW ──
+   Identical grid so the cells line up. NOT sticky — same reason as the
+   banner: panel doesn't move when you scroll vertically.
+
+   12 columns total:
+     1. headshot       36px
+     2. name + flags   minmax(180px, 1fr)    flexes
+     3. season avg     46px
+     4. projected μ    46px
+     5-14. ≥16..≥34    10 × 42px            tabular nums right-aligned
+*/
+.mc-disp-colhead,
+.mc-disp-row{
+  display:grid;
+  grid-template-columns:
+    36px
+    minmax(180px, 1fr)
+    46px
+    46px
+    repeat(10, 42px);
+  align-items:center;
+  gap:6px;
+  padding:6px 14px;
+}
+.mc-disp-colhead{
+  background:var(--bg2);
+  border-bottom:1px solid var(--border2);
+  padding-top:8px; padding-bottom:8px;
+}
+.mc-disp-colhead .mc-disp-cell{
+  font-family:var(--mono);
+  font-size:0.44rem; font-weight:700;
+  letter-spacing:0.12em; text-transform:uppercase;
+  color:var(--text3);
+  line-height:1;
+}
+.mc-disp-cell-avg,
+.mc-disp-cell-mean,
+.mc-disp-prob-h,
+.mc-disp-prob{
+  text-align:right;
+}
+.mc-disp-prob-h{font-variant-numeric:tabular-nums;}
+
+/* ── PLAYER ROW ─────────────────────────────────────────────────────── */
+.mc-disp-row{
+  border-bottom:1px solid rgba(255,255,255,0.025);
+  animation:mc-disp-row-in 0.35s ease-out both;
+  animation-delay:calc(var(--row-i, 0) * 0.018s);
+  transition:background 0.15s ease;
+  min-height:44px;
+}
+.mc-disp-row:hover{background:rgba(255,255,255,0.025);}
+@keyframes mc-disp-row-in{
+  from{opacity:0; transform:translateY(2px);}
+  to{opacity:1; transform:translateY(0);}
+}
+
+/* ── HEADSHOT ── 32px disc, team-accented halo, initials fallback ── */
+/* ── HEADSHOT — CONVICTION RING ──
+   Each headshot disc carries a coloured ring + outer glow whose colour
+   reflects the player's PROJECTED MEAN conviction tier (see
+   _conviction_tier in the Python). Set via the data-conviction attribute
+   on the parent .mc-disp-cell-shot, which CSS reads via [data-x] selectors
+   below. The radial gradient inside the disc picks up the same colour,
+   so the headshot itself glows in tier colour even before you look at
+   the row's data.
+
+   The ring intensifies on hover — a small premium touch that makes the
+   headshot feel tactile. */
+.mc-disp-shot{
+  position:relative;
+  display:inline-flex;
+  align-items:center; justify-content:center;
+  width:32px; height:32px;
+  border-radius:50%;
+  /* Default ring (no conviction set) — neutral disc. Overridden below
+     by [data-conviction] rules on the parent cell. */
+  background:radial-gradient(circle at 50% 35%,
+    rgba(255,255,255,0.05) 0%,
+    rgba(255,255,255,0.02) 60%,
+    rgba(255,255,255,0) 100%);
+  border:1px solid rgba(255,255,255,0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.05),
+    0 0 5px rgba(255,255,255,0.04);
+  overflow:hidden;
+  transition:box-shadow 0.22s ease, transform 0.22s ease;
+}
+/* Tier-specific rings — driven by the parent cell's data-conviction.
+   The inner radial picks up the tier colour at low alpha so even the
+   fallback initials disc glows in tier colour. The outer drop-shadow
+   creates a soft halo that's visible against the dark card bg. */
+.mc-disp-cell-shot[data-conviction="lock"] .mc-disp-shot{
+  background:radial-gradient(circle at 50% 35%,
+    rgba(52,211,153,0.22) 0%,
+    rgba(52,211,153,0.04) 55%,
+    rgba(52,211,153,0) 100%);
+  border:1px solid rgba(52,211,153,0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(52,211,153,0.10),
+    0 0 8px rgba(52,211,153,0.35);
+}
+.mc-disp-cell-shot[data-conviction="edge"] .mc-disp-shot{
+  background:radial-gradient(circle at 50% 35%,
+    rgba(79,143,255,0.20) 0%,
+    rgba(79,143,255,0.04) 55%,
+    rgba(79,143,255,0) 100%);
+  border:1px solid rgba(79,143,255,0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(79,143,255,0.10),
+    0 0 7px rgba(79,143,255,0.30);
+}
+.mc-disp-cell-shot[data-conviction="warm"] .mc-disp-shot{
+  background:radial-gradient(circle at 50% 35%,
+    rgba(251,191,36,0.18) 0%,
+    rgba(251,191,36,0.04) 55%,
+    rgba(251,191,36,0) 100%);
+  border:1px solid rgba(251,191,36,0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(251,191,36,0.10),
+    0 0 6px rgba(251,191,36,0.28);
+}
+.mc-disp-cell-shot[data-conviction="dim"] .mc-disp-shot{
+  /* Dim players get a neutral white-grey ring — present but quiet. */
+  background:radial-gradient(circle at 50% 35%,
+    rgba(255,255,255,0.06) 0%,
+    rgba(255,255,255,0.02) 60%,
+    rgba(255,255,255,0) 100%);
+  border:1px solid rgba(255,255,255,0.10);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    0 0 4px rgba(255,255,255,0.04);
+}
+/* Hover intensifies the ring — same idea as the cell hover. Lifts
+   the disc by 1px and boosts the glow. */
+.mc-disp-row:hover .mc-disp-shot{
+  transform:translateY(-1px);
+}
+.mc-disp-cell-shot[data-conviction="lock"] .mc-disp-shot:hover,
+.mc-disp-row:hover .mc-disp-cell-shot[data-conviction="lock"] .mc-disp-shot{
+  box-shadow:
+    inset 0 1px 0 rgba(52,211,153,0.18),
+    0 0 12px rgba(52,211,153,0.50);
+}
+.mc-disp-cell-shot[data-conviction="edge"] .mc-disp-shot:hover,
+.mc-disp-row:hover .mc-disp-cell-shot[data-conviction="edge"] .mc-disp-shot{
+  box-shadow:
+    inset 0 1px 0 rgba(79,143,255,0.18),
+    0 0 11px rgba(79,143,255,0.45);
+}
+.mc-disp-cell-shot[data-conviction="warm"] .mc-disp-shot:hover,
+.mc-disp-row:hover .mc-disp-cell-shot[data-conviction="warm"] .mc-disp-shot{
+  box-shadow:
+    inset 0 1px 0 rgba(251,191,36,0.18),
+    0 0 10px rgba(251,191,36,0.42);
+}
+
+.mc-disp-shot-initials{
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  font-family:var(--mono);
+  font-size:0.56rem; font-weight:800;
+  letter-spacing:0.04em;
+  color:rgba(212,218,224,0.7);
+  line-height:1;
+  user-select:none;
+  pointer-events:none;
+}
+.mc-disp-shot-img{
+  position:absolute; inset:0;
+  width:100%; height:100%;
+  object-fit:cover;
+  object-position:center 22%;
+  animation:mc-disp-shot-fade 0.5s ease-out both;
+  animation-delay:calc(var(--row-i, 0) * 0.03s);
+}
+@keyframes mc-disp-shot-fade{
+  from{opacity:0;}
+  to{opacity:1;}
+}
+
+/* ── NAME CELL ──
+   Name + inline flag tags. min-width:0 lets the flex child shrink and
+   the ellipsis truncate cleanly. */
+.mc-disp-cell-name{
+  display:flex; align-items:center; gap:6px;
+  min-width:0;
+  overflow:hidden;
+}
+.mc-disp-name{
+  font-family:var(--mono);
+  font-size:0.62rem; font-weight:700;
+  color:var(--white);
+  letter-spacing:0.01em;
+  line-height:1.2;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+/* ── AVG + MEAN CELLS ──
+   Two adjacent number columns. Season average (raw baseline) on the
+   left, projected mean (matchup-adjusted) on the right. When they
+   diverge, the model is telling you something. */
+.mc-disp-cell-avg{
+  font-family:var(--mono);
+  font-size:0.58rem; font-weight:600;
+  color:var(--text2);
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+}
+.mc-disp-cell-mean{
+  font-family:var(--mono);
+  font-size:0.66rem; font-weight:700;
+  color:var(--white);
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+}
+
+/* ── INLINE FLAGS ── *, T, NAMED, EMG, UNC ── */
+.mc-disp-flag{
+  display:inline-block;
+  font-family:var(--mono);
+  font-size:0.55rem; font-weight:800;
+  letter-spacing:0.04em;
+  line-height:1;
+  cursor:help;
+}
+.mc-disp-flag-form{
+  color:var(--accent2);
+  text-shadow:0 0 4px rgba(167,139,250,0.5);
+}
+.mc-disp-flag-trav{
+  color:var(--accent3);
+  text-shadow:0 0 3px rgba(34,211,238,0.4);
+}
+.mc-disp-sel{
+  display:inline-block;
+  padding:1px 5px;
+  border-radius:2px;
+  font-family:var(--mono);
+  font-size:0.42rem; font-weight:800;
+  letter-spacing:0.08em;
+  line-height:1.4;
+  vertical-align:1px;
+  cursor:help;
+}
+.mc-disp-sel-named{
+  background:rgba(52,211,153,0.10);
+  color:var(--green);
+  border:1px solid rgba(52,211,153,0.25);
+}
+.mc-disp-sel-emg{
+  background:rgba(167,139,250,0.10);
+  color:var(--accent2);
+  border:1px solid rgba(167,139,250,0.25);
+}
+.mc-disp-sel-unc{
+  background:rgba(120,120,160,0.08);
+  color:var(--text2);
+  border:1px solid rgba(120,120,160,0.20);
+}
+
+/* ── PROBABILITY CELLS — PREMIUM TREATMENT ──
+   The data the punter is here for. Each cell is a small tile with:
+     • Tier-tinted background (green / blue / amber / dim)
+     • Tier-coloured digits with a proper glow
+     • A subtle 1px ring matching the tier so even at low alpha the
+       cell reads as a distinct unit, not just coloured text
+     • Hover lift — pops the cell forward, intensifies the glow,
+       makes the data feel tangible
+
+   Three actionable tiers + one noise floor. Colour boundaries per
+   the user's spec:
+     • 90%+   green   "lock"
+     • 70-89  blue    "edge"
+     • 50-69  amber   "warm"
+     • <50    dim     "noise" */
+.mc-disp-prob{
+  font-family:var(--mono);
+  font-size:0.66rem; font-weight:800;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:0.01em;
+  line-height:1;
+  /* Bigger hit area + room for the tile background. Padding tuned so
+     the tile occupies the visual centre of its grid cell, not the
+     entire cell — gives the eye whitespace between adjacent tiles
+     even when every cell is lit. */
+  padding:5px 6px;
+  border-radius:3px;
+  text-align:right;
+  transition:transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+/* Hover lifts the tile by 1px and boosts the glow. Cheap, premium-feeling
+   micro-interaction — every cell becomes touchable. */
+.mc-disp-prob:hover{
+  transform:translateY(-1px);
+  cursor:default;  /* not interactive, but reads as "you can scan me" */
+}
+
+/* ── TIER PALETTES ──
+   The classes below stack on .mc-disp-prob. Each tier sets:
+     • text colour + text-shadow glow
+     • background tint (low alpha so the cell can sit on coloured rows
+       without colour-stacking violently)
+     • inset 1px ring for tile definition */
+.mc-disp-prob-lock{
+  color:var(--green);
+  background:rgba(52,211,153,0.08);
+  box-shadow:inset 0 0 0 1px rgba(52,211,153,0.22);
+  text-shadow:0 0 8px rgba(52,211,153,0.55);
+}
+.mc-disp-prob-lock:hover{
+  background:rgba(52,211,153,0.14);
+  box-shadow:
+    inset 0 0 0 1px rgba(52,211,153,0.40),
+    0 2px 8px rgba(52,211,153,0.20);
+  text-shadow:0 0 12px rgba(52,211,153,0.70);
+}
+.mc-disp-prob-edge{
+  color:var(--accent);
+  background:rgba(79,143,255,0.07);
+  box-shadow:inset 0 0 0 1px rgba(79,143,255,0.22);
+  text-shadow:0 0 6px rgba(79,143,255,0.45);
+}
+.mc-disp-prob-edge:hover{
+  background:rgba(79,143,255,0.13);
+  box-shadow:
+    inset 0 0 0 1px rgba(79,143,255,0.40),
+    0 2px 8px rgba(79,143,255,0.18);
+  text-shadow:0 0 10px rgba(79,143,255,0.60);
+}
+.mc-disp-prob-warm{
+  color:var(--amber);
+  background:rgba(251,191,36,0.07);
+  box-shadow:inset 0 0 0 1px rgba(251,191,36,0.22);
+  text-shadow:0 0 5px rgba(251,191,36,0.45);
+}
+.mc-disp-prob-warm:hover{
+  background:rgba(251,191,36,0.13);
+  box-shadow:
+    inset 0 0 0 1px rgba(251,191,36,0.40),
+    0 2px 8px rgba(251,191,36,0.18);
+  text-shadow:0 0 9px rgba(251,191,36,0.60);
+}
+/* ── FLIP ── pure coin-flip (48-50%).
+   The model genuinely has no edge either way. Visually distinct from
+   both warm (amber, signals tilt) and dim (text3, signals noise) so a
+   punter never misreads "50% — could go either way" as "warm — lean
+   yes". Uses a soft white at low alpha — present but explicitly NOT
+   coloured. The tiny ring confirms it's still a real data cell, not
+   missing data. */
+.mc-disp-prob-flip{
+  color:var(--text);
+  background:rgba(255,255,255,0.04);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.14);
+  /* No text-shadow — coin flip should feel neutral, not glow */
+}
+.mc-disp-prob-flip:hover{
+  background:rgba(255,255,255,0.07);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.22);
+}
+.mc-disp-prob-dim{
+  color:var(--text3);
+  /* No background, no ring — dim cells deliberately recede so the
+     lit cells stand out. */
+}
+
+/* The `%` glyph is the unit, not the data. Render it smaller and
+   slightly dimmer so the number itself remains the focal point —
+   "96%" reads as ninety-six with a tiny unit caption, not as four
+   equal-weight characters. */
+.mc-disp-prob small{
+  font-size:0.65em;
+  font-weight:600;
+  opacity:0.55;
+  margin-left:1px;
+}
+
+/* ── PER-ROW CONVICTION TINT ──
+   The row's background carries a very faint coloured wash based on
+   the player's projected mean (see _conviction_tier in the Python).
+   Scanning the panel, the punter sees coloured rows for the actionable
+   players BEFORE reading any number — green rows = elite ball-magnets,
+   blue rows = solid mids, amber rows = role players, dim rows = fringe.
+
+   The tints are deliberately faint (0.04 alpha at the left, fading to
+   transparent at the right) so they NEVER fight the per-cell tier
+   colours sitting on top. The gradient direction puts the player's
+   name on the coloured end, so the row "starts" with conviction and
+   the data sprawls across a neutral field. */
+.mc-disp-row[data-conviction="lock"]{
+  background:linear-gradient(90deg,
+    rgba(52,211,153,0.05) 0%,
+    rgba(52,211,153,0.02) 30%,
+    transparent 70%);
+}
+.mc-disp-row[data-conviction="edge"]{
+  background:linear-gradient(90deg,
+    rgba(79,143,255,0.045) 0%,
+    rgba(79,143,255,0.018) 30%,
+    transparent 70%);
+}
+.mc-disp-row[data-conviction="warm"]{
+  background:linear-gradient(90deg,
+    rgba(251,191,36,0.04) 0%,
+    rgba(251,191,36,0.015) 30%,
+    transparent 70%);
+}
+/* Dim rows get no tint — they're the noise floor. */
+
+/* Hover layer the wash up gently so the whole row feels reactive
+   when the punter mouses over it. The previous .mc-disp-row:hover
+   rule (white wash) is now layered ON TOP of the conviction tint
+   thanks to the cascade — both apply, the white wash dominates. */
+.mc-disp-row:hover{
+  background:rgba(255,255,255,0.025);
+}
+.mc-disp-row[data-conviction="lock"]:hover{
+  background:linear-gradient(90deg,
+    rgba(52,211,153,0.09) 0%,
+    rgba(52,211,153,0.04) 30%,
+    rgba(255,255,255,0.025) 70%);
+}
+.mc-disp-row[data-conviction="edge"]:hover{
+  background:linear-gradient(90deg,
+    rgba(79,143,255,0.085) 0%,
+    rgba(79,143,255,0.035) 30%,
+    rgba(255,255,255,0.025) 70%);
+}
+.mc-disp-row[data-conviction="warm"]:hover{
+  background:linear-gradient(90deg,
+    rgba(251,191,36,0.075) 0%,
+    rgba(251,191,36,0.030) 30%,
+    rgba(255,255,255,0.025) 70%);
+}
+
+/* ── EMPTY STATE ─────────────────────────────────────────────────── */
+.mc-disp-empty{
+  padding:18px 14px;
+  font-family:var(--mono);
+  font-size:0.5rem;
+  color:var(--text3);
+  text-align:center;
+  letter-spacing:0.04em;
+  font-style:italic;
+  border-bottom:1px solid var(--border);
+}
+
+/* ── FOOTNOTE LEGEND ── compact, explains every glyph ── */
+/* ── FOOTNOTE LEGEND ──
+   Two-row layout. Top: tier-colour pills (the colour key — explains
+   what green/blue/amber/dim mean in the cells above). Bottom: glyph
+   legend (AVG, μ, *, T, NAMED, UNC). The two rows are separated by
+   the eye but share the same dim-text bedrock so neither feels louder
+   than the other. */
+.mc-disp-foot{
+  display:flex; flex-direction:column;
+  align-items:center;
+  gap:9px;
+  padding:11px 12px 13px;
+  font-family:var(--mono);
+  font-size:0.46rem; font-weight:500;
+  color:var(--text3);
+  letter-spacing:0.06em;
+  line-height:1.4;
+  border-top:1px solid var(--border);
+}
+.mc-disp-foot-tiers{
+  display:flex; flex-wrap:wrap; justify-content:center;
+  gap:6px;
+}
+/* Tier pills mirror the cell tier styling exactly — same colours,
+   same glow, same tile shape. So the key visually IS the legend:
+   a punter sees "90%+ → green pill" and immediately recognises the
+   green cells above as the same signal. */
+.mc-disp-foot-tier{
+  display:inline-flex; align-items:center;
+  padding:2px 7px;
+  border-radius:3px;
+  font-size:0.48rem; font-weight:800;
+  letter-spacing:0.04em;
+  font-variant-numeric:tabular-nums;
+}
+.mc-disp-foot-tier-lock{
+  color:var(--green);
+  background:rgba(52,211,153,0.08);
+  box-shadow:inset 0 0 0 1px rgba(52,211,153,0.30);
+  text-shadow:0 0 6px rgba(52,211,153,0.50);
+}
+.mc-disp-foot-tier-edge{
+  color:var(--accent);
+  background:rgba(79,143,255,0.07);
+  box-shadow:inset 0 0 0 1px rgba(79,143,255,0.28);
+  text-shadow:0 0 5px rgba(79,143,255,0.42);
+}
+.mc-disp-foot-tier-warm{
+  color:var(--amber);
+  background:rgba(251,191,36,0.07);
+  box-shadow:inset 0 0 0 1px rgba(251,191,36,0.28);
+  text-shadow:0 0 4px rgba(251,191,36,0.40);
+}
+.mc-disp-foot-tier-flip{
+  color:var(--text);
+  background:rgba(255,255,255,0.04);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.18);
+  /* No text-shadow — matches the neutral coin-flip cell aesthetic. */
+}
+.mc-disp-foot-tier-dim{
+  color:var(--text3);
+  background:rgba(255,255,255,0.02);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+
+.mc-disp-foot-meta{
+  display:flex; flex-wrap:wrap; justify-content:center;
+  gap:14px;
+}
+.mc-disp-foot-item{
+  display:inline-flex; align-items:center; gap:4px;
+}
+
+/* ── MOBILE — same horizontal-scroll story, slightly tighter sizes ─── */
+@media (max-width:560px){
+  .mc-disp-colhead,
+  .mc-disp-row{
+    grid-template-columns:
+      28px
+      minmax(140px, 1fr)
+      40px
+      40px
+      repeat(10, 38px);
+    gap:4px;
+    padding:5px 10px;
+  }
+  .mc-disp-sect-banner{padding:8px 10px;}
+  .mc-disp-sect-abbr{font-size:0.66rem;}
+  .mc-disp-sect-team{display:none;}
+  .mc-disp-shot{width:26px; height:26px;}
+  .mc-disp-shot-initials{font-size:0.48rem;}
+  .mc-disp-name{font-size:0.56rem;}
+  .mc-disp-cell-avg{font-size:0.54rem;}
+  .mc-disp-cell-mean{font-size:0.58rem;}
+  .mc-disp-prob{font-size:0.56rem;}
+  .mc-disp-foot{
+    gap:8px;
+    padding:8px 10px 10px;
+    font-size:0.42rem;
+  }
+
+  /* ── MOBILE SWIPE HINT ──
+     The table is wider than the viewport on phones — 10 threshold
+     columns can't physically fit a 360px screen. Without a hint
+     users assume they're already seeing all the data. Two cues:
+
+     1) RIGHT-EDGE FADE. A vertical gradient on the right edge of
+        the scroll container fades the trailing cells into shadow,
+        creating an obvious "more content this way" visual.
+        Implemented via ::after on .mc-disp-hscroll so it overlays
+        the scrolling content. pointer-events:none lets swipes pass
+        through cleanly.
+
+     2) SWIPE-CHEVRON. A small "›" appears just inside the right edge
+        with a gentle horizontal nudge animation. Only animates for
+        the first ~6 seconds after the panel opens — long enough for
+        the user to notice, short enough that it never becomes nagging.
+        Hidden permanently once the user has scrolled the panel right
+        (we toggle a data attribute via JS — but as a graceful
+        fallback if JS doesn't run, the animation just stops on its
+        own after the 6-second mark). */
+  .mc-disp-hscroll::after{
+    content:'';
+    position:absolute;
+    top:0; right:0; bottom:0;
+    width:36px;
+    pointer-events:none;
+    background:linear-gradient(
+      to right,
+      transparent 0%,
+      var(--bg2) 100%
+    );
+    opacity:0.7;
+    z-index:3;
+    transition:opacity 0.25s ease;
+  }
+  /* Chevron — sits just inside the fade. Pulses to the LEFT (toward
+     the visible content) to convey "drag this content over". CSS
+     animation only — no JS dependency. Auto-dies after 3 iterations
+     (~6s) so it never becomes wallpaper. */
+  .mc-disp-hscroll::before{
+    content:'›';
+    position:absolute;
+    top:50%;
+    right:10px;
+    transform:translateY(-50%);
+    font-family:var(--mono);
+    font-size:1.1rem;
+    font-weight:300;
+    color:var(--accent2);
+    opacity:0;
+    z-index:4;
+    pointer-events:none;
+    text-shadow:0 0 6px rgba(167,139,250,0.5);
+    animation:mc-disp-swipe-hint 1.8s ease-in-out 3 both;
+    animation-delay:0.35s;
+  }
+  @keyframes mc-disp-swipe-hint{
+    0%   {opacity:0; transform:translateY(-50%) translateX(0);}
+    20%  {opacity:0.85; transform:translateY(-50%) translateX(0);}
+    50%  {opacity:0.85; transform:translateY(-50%) translateX(-7px);}
+    80%  {opacity:0.85; transform:translateY(-50%) translateX(0);}
+    100% {opacity:0; transform:translateY(-50%) translateX(0);}
+  }
+  /* Once the user has scrolled — even a tiny bit — kill both hints.
+     The data attribute is set by a tiny inline listener (see the JS
+     block elsewhere in the app). If no JS runs, the chevron animation
+     stops on its own (3 iterations); the fade stays but that's fine,
+     it's just a soft edge. */
+  .mc-disp-hscroll[data-scrolled="1"]::before{
+    animation:none;
+    opacity:0;
+  }
+  .mc-disp-hscroll[data-scrolled="1"]::after{
+    opacity:0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .mc-disp-sum-chevron,
+  .mc-disp-row,
+  .mc-disp-shot-img{
+    animation:none!important;
+    transition:none!important;
+  }
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ── ANIMATED COUNT-UP ON PANEL OPEN ──
+# Adds a sub-500ms count-up animation to every probability cell when a
+# disposal panel is opened. Bare numbers feel like a spreadsheet;
+# numbers that tick up from 0 feel like a live computation — and that
+# perception alone differentiates this from every other AFL stats site.
+#
+# Why components.html instead of inlining the script in st.markdown:
+# Streamlit's markdown sanitizer strips <script> tags. components.html
+# runs JS in a same-origin iframe and can reach back into the parent
+# document via window.parent.document, exactly the pattern the existing
+# percentage-counter at the bottom of the app already uses.
+components.html(
+    """
+    <script>
+    (function(){
+        // Anti-double-init guard. Streamlit reruns the script on every
+        // partial rerender; we only want to wire the listeners once.
+        const doc = window.parent && window.parent.document;
+        if (!doc) return;
+        if (doc.__mcDispAnimWired) return;
+        doc.__mcDispAnimWired = true;
+
+        // Easing — quadratic out. Fast initial movement, gentle landing.
+        // Same curve fintech UIs use for balance count-ups; the eye
+        // reads it as "snappy but not jarring".
+        const easeOutQuad = t => 1 - (1 - t) * (1 - t);
+
+        // Pulls the target percentage out of the cell's text content.
+        // Each .mc-disp-prob carries text like "96%" — we parse the
+        // integer once and store it on the element so subsequent
+        // animations (panel reopened, page reflowed) don't re-parse.
+        const parseTarget = (el) => {
+            if (el.__mcTarget != null) return el.__mcTarget;
+            const t = el.textContent.trim();
+            const n = parseInt(t, 10);
+            el.__mcTarget = isNaN(n) ? 0 : n;
+            // Cache the trailing %-tag HTML so we re-render it after
+            // the count is done. textContent strips the <small> wrapper,
+            // which we need to preserve for the unit styling.
+            el.__mcSuffix = el.innerHTML.includes('<small')
+                ? el.innerHTML.replace(/^[0-9]+/, '')
+                : '%';
+            return el.__mcTarget;
+        };
+
+        // Animate one cell from 0 to its target. ~420ms with a tiny
+        // per-cell stagger so the panel reads as a cascade rather than
+        // a single synchronous twitch. row-i is set per-row by Python;
+        // we read it from the closest .mc-disp-row.
+        const animateCell = (el, baseDelay) => {
+            const target = parseTarget(el);
+            if (target === 0) {
+                // Don't animate "0%" — it's the noise-floor cell, the
+                // count-up adds nothing and the visual flutter is
+                // distracting. Just render the static number.
+                return;
+            }
+            const duration = 420;
+            const startedAt = performance.now() + baseDelay;
+            const tick = (now) => {
+                if (now < startedAt) {
+                    requestAnimationFrame(tick);
+                    return;
+                }
+                const elapsed = now - startedAt;
+                const t = Math.min(1, elapsed / duration);
+                const eased = easeOutQuad(t);
+                const v = Math.round(target * eased);
+                el.innerHTML = v + el.__mcSuffix;
+                if (t < 1) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+        };
+
+        // Animate every prob cell inside a freshly-opened disclosure.
+        // Stagger by row index AND by column index — cells animate in
+        // a diagonal sweep top-left to bottom-right, ~10ms per row +
+        // ~6ms per column. Cheap, premium feel.
+        const animateDisclosure = (disclosure) => {
+            if (disclosure.__mcAnimDone) return;
+            disclosure.__mcAnimDone = true;
+            const rows = disclosure.querySelectorAll('.mc-disp-row');
+            rows.forEach((row, rowIdx) => {
+                const cells = row.querySelectorAll('.mc-disp-prob');
+                cells.forEach((cell, colIdx) => {
+                    const delay = rowIdx * 10 + colIdx * 6;
+                    animateCell(cell, delay);
+                });
+            });
+            // Also animate the top-edge callout cards' prob tiles.
+            const edgeCells = disclosure.querySelectorAll(
+                '.mc-disp-edge-prob-num'
+            );
+            edgeCells.forEach((cell, idx) => {
+                animateCell(cell, idx * 40);
+            });
+        };
+
+        // Wire listeners. Two strategies running in parallel:
+        //   1) toggle event on every existing disclosure (handles user
+        //      opening the panel after page load)
+        //   2) MutationObserver on the body to catch disclosures added
+        //      later (Streamlit lazy-renders cards as the user scrolls)
+        const wireDisclosure = (disclosure) => {
+            if (disclosure.__mcAnimWired) return;
+            disclosure.__mcAnimWired = true;
+            disclosure.addEventListener('toggle', () => {
+                if (disclosure.open) animateDisclosure(disclosure);
+            });
+            // Also animate immediately if it's already open at wire time
+            // — e.g. the user opens it before our script reaches it.
+            if (disclosure.open) animateDisclosure(disclosure);
+
+            // Mark the hscroll container as "scrolled" the moment the
+            // user moves it sideways at all. This kills the right-edge
+            // swipe-hint chevron (see CSS rule on
+            // .mc-disp-hscroll[data-scrolled="1"]) so the hint never
+            // nags a user who's already discovered the swipe.
+            // {passive:true} keeps the scroll smooth — we never call
+            // preventDefault in here.
+            const scroller = disclosure.querySelector('.mc-disp-hscroll');
+            if (scroller && !scroller.__mcScrollWired) {
+                scroller.__mcScrollWired = true;
+                const onScroll = () => {
+                    if (scroller.scrollLeft > 4) {
+                        scroller.setAttribute('data-scrolled', '1');
+                        scroller.removeEventListener('scroll', onScroll);
+                    }
+                };
+                scroller.addEventListener('scroll', onScroll, {passive:true});
+            }
+        };
+
+        const wireAll = () => {
+            doc.querySelectorAll('.mc-disp-disclosure').forEach(wireDisclosure);
+        };
+
+        wireAll();
+
+        // Catch disclosures added after initial wire (lazy-rendered
+        // game cards as the user scrolls down This Round).
+        const obs = new MutationObserver((mutations) => {
+            for (const m of mutations) {
+                for (const node of m.addedNodes) {
+                    if (node.nodeType !== 1) continue;
+                    if (node.classList && node.classList.contains('mc-disp-disclosure')) {
+                        wireDisclosure(node);
+                    } else if (node.querySelectorAll) {
+                        node.querySelectorAll('.mc-disp-disclosure').forEach(wireDisclosure);
+                    }
+                }
+            }
+        });
+        obs.observe(doc.body, {childList: true, subtree: true});
+    })();
+    </script>
+    """,
+    height=0,
+)
+
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # API
@@ -6436,6 +12115,16 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
     # placeholder shows the player's initials instead — no broken images.
     h2h_player_id_lookup, _h2h_player_id_status = fetch_h2h_player_id_lookup()
 
+    # Pull the disposal projections ONCE per render. The pipeline call is
+    # behind st.cache_data with a 6h TTL so this is a dict lookup on every
+    # rerun except the very first per-container-lifetime cold start.
+    # build_disposal_lookup pre-sorts each team's players by projected
+    # mean desc so the per-card render is a simple slice — no per-card
+    # sort work. Returns ({}, []) if the model is unavailable or the
+    # scrape failed; the renderer hides itself cleanly in that case.
+    disposal_snapshot = get_disposal_projections()
+    disposal_by_team, disposal_thresholds = build_disposal_lookup(disposal_snapshot)
+
     # Surface a single round-wide status banner ONLY for actionable failures.
     # The "ok" / "empty" cases are silent — per-card disclaimers handle those.
     if selections_status == "missing-deps":
@@ -6722,6 +12411,17 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
             watchlist_filtered=_filter_changed,
         )
 
+        # Disposal-projection block — returns "" when the model is offline
+        # or this match has no usable player pool, so it self-hides without
+        # leaving an empty container in the card. `home` and `away` are
+        # already canonical app names by this point (see lines above where
+        # they're set via canonical(game['hteam'])), so the renderer can
+        # bridge straight to the model's team names.
+        disposal_block_html = render_disposal_block(
+            home, away, disposal_by_team, disposal_thresholds,
+            player_id_lookup=h2h_player_id_lookup,
+        )
+
         st.markdown(_h(f"""
         <div id="g-{game['id']}" class="mc mc-conf-{conf_tier} {'mc-live' if status == 'live' else ''}" style="animation-delay:{i*0.04}s; {card_style_extra}">
           <div style="height:2px;background:linear-gradient(90deg,{home_bg} 0%,{home_bg} 49%,var(--border) 49%,var(--border) 51%,{away_bg} 51%,{away_bg} 100%);"></div>
@@ -6760,6 +12460,7 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
           </div>
           {render_match_pending_banner(dp, game['id']) if _sel_record is None else ''}
           {h2h_block_html}
+          {disposal_block_html}
           <div class="mc-tip">
             <div class="mc-tip-lbl">Our Prediction</div>
             <div class="mc-tip-chip-row">
@@ -12505,6 +18206,15 @@ def main():
                 # disclosure is expanded. This is a single ~1MB JSON fetch
                 # cached for 24h so it's cheap on subsequent renders.
                 fetch_h2h_player_id_lookup()
+                # Warm the disposal-projection pipeline during the loading
+                # overlay too. Cold start can take ~5 min on a brand-new
+                # container (it scrapes every completed 2026 game from
+                # footywire), so doing it here puts that cost INSIDE the
+                # ceremony rather than mid-page-render. Once warm, every
+                # subsequent get_disposal_projections() call is a cached
+                # dict lookup. Failure here is silently swallowed — game
+                # cards still render, the disposal block just hides.
+                get_disposal_projections()
             except Exception:
                 pass
         except Exception as e:
@@ -13178,5 +18888,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 

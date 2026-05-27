@@ -238,6 +238,54 @@ H2H_PLAYER_NAME_ALIASES = {
     "Lachlan Jones":    "Lachie Jones",
 }
 
+# Common formal-to-casual first-name diminutives in AFL. Footywire (the
+# disposal model's data source) often carries the formal version on its
+# stats pages — "Lachlan Whitfield", "Maximilian Holmes" — while AFL
+# Fantasy uses the casual form fans recognise. Rather than enumerate
+# every Lachie/Max/Mitch/Tom in the league in H2H_PLAYER_NAME_ALIASES,
+# this table is applied PROGRAMMATICALLY as a fallback in
+# h2h_headshot_url(): if the as-is lookup fails AND the explicit alias
+# map doesn't have an entry, swap the first name and retry.
+#
+# Entries here are normalised forms — lowercase, no punctuation — to
+# match how _normalise_player_name(...) cleans the name. Mappings are
+# unidirectional (formal → casual); we also try the reverse direction
+# in the fallback chain.
+#
+# When in doubt, the EXPLICIT alias map above takes precedence — use
+# that for one-off corrections (e.g., a player who uses their middle
+# name as their public name). This table is just for the predictable
+# common cases.
+H2H_FIRST_NAME_DIMINUTIVES = {
+    "lachlan":     "lachie",
+    "maximilian":  "max",
+    "mitchell":    "mitch",
+    "thomas":      "tom",
+    "samuel":      "sam",
+    "joshua":      "josh",
+    "zachary":     "zach",
+    "nicholas":    "nick",
+    "matthew":     "matt",
+    "benjamin":    "ben",
+    "william":     "will",
+    "daniel":      "dan",
+    "christopher": "chris",
+    "anthony":     "tony",
+    "patrick":     "pat",
+    "andrew":      "andy",
+    "jonathon":    "jon",
+    "jonathan":    "jon",
+    "alexander":   "alex",
+    "edward":      "ed",
+    "harrison":    "harry",
+    "michael":     "mick",
+    # Less-common but documented in current AFL rosters:
+    "jeremy":      "jez",     # rare; keep for completeness
+    "joseph":      "joe",
+    "richard":     "ricky",
+    "robert":      "rob",
+}
+
 # Stat codes pulled from the rankings page — each maps a column header to
 # a friendly label for the tornado chart. Order here is the row order on
 # the chart (most-readable first: ball use, then scoring, then defence).
@@ -6834,12 +6882,75 @@ DISPOSAL_MODEL_TEAM_NAME = {
 }
 
 
+def _disposal_cache_bucket():
+    """
+    Return a string cache-key that buckets the current time into windows.
+    During the Wed/Thu team-list release windows (when AFL clubs name
+    their 23 + emergencies), the bucket is 15 minutes wide so the panel
+    refreshes shortly after team lists drop. The rest of the week the
+    bucket is 6 hours wide, conserving footywire requests.
+
+    Why bucket-as-arg instead of just lowering the TTL: @st.cache_data
+    caches by argument value. If we passed time.time() directly the cache
+    would never hit. Bucketing gives us "discrete time-windows" where every
+    call within the same window hits the cache, but a new window forces
+    a refresh.
+
+    Release windows per userMemories:
+      • Thursday matches: Wed 6:30pm Melbourne → ~24h window
+      • Fri/Sat/Sun matches: Thu 6:30pm Melbourne → ~24h window
+    We start the fast-refresh window 1h BEFORE the drop time (covers
+    early-release clubs) and run it through 24h after (covers slow updates
+    + late changes).
+    """
+    melbourne = ZoneInfo("Australia/Melbourne")
+    now = datetime.now(melbourne)
+    dow = now.weekday()  # Mon=0 ... Sun=6
+    hour_decimal = now.hour + now.minute / 60.0
+
+    # Wed (dow=2) 5:30pm → Thu (dow=3) 9:30pm — Thursday-match team lists
+    in_wed_window = (
+        (dow == 2 and hour_decimal >= 17.5) or
+        (dow == 3 and hour_decimal <= 21.5)
+    )
+    # Thu (dow=3) 5:30pm → Fri (dow=4) 9:30pm — Fri/Sat/Sun team lists
+    in_thu_window = (
+        (dow == 3 and hour_decimal >= 17.5) or
+        (dow == 4 and hour_decimal <= 21.5)
+    )
+    in_release_window = in_wed_window or in_thu_window
+
+    if in_release_window:
+        # 15-minute buckets — fast enough that a panel refresh hits
+        # within ~15 minutes of team lists dropping, slow enough that
+        # we don't hammer footywire while the page sits idle.
+        bucket_minutes = 15
+    else:
+        # 6-hour buckets — same effective cache lifetime as the old
+        # static TTL, just expressed as a discrete window key.
+        bucket_minutes = 360
+
+    # Bucket index from the start of the year so it's stable for as
+    # long as Streamlit Cloud keeps the container warm.
+    minutes_since_epoch = int(now.timestamp() // 60)
+    bucket_idx = minutes_since_epoch // bucket_minutes
+    return f"bucket_{bucket_idx}_{bucket_minutes}m"
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
-def get_disposal_projections():
+def get_disposal_projections(time_bucket: str = ""):
     """
     Run the disposal pipeline and return its snapshot, or an empty dict on
-    any failure. Cached for 6 hours so first user of a session warms it and
-    every game card afterwards is a dict lookup.
+    any failure.
+
+    Cached on `time_bucket`: when the bucket key changes, Streamlit treats
+    it as a different call and re-runs the pipeline. This lets us refresh
+    quickly during team-list release windows (15-minute buckets) and
+    relax to 6-hour buckets the rest of the week — see
+    _disposal_cache_bucket() above.
+
+    The 6-hour ttl is the upper bound on staleness; the bucket-arg is
+    the lower bound on freshness. Both protections active together.
 
     Returns a dict with at least:
       round       (int)           the round projected
@@ -6869,40 +6980,79 @@ def get_disposal_projections():
 def build_disposal_lookup(snapshot):
     """
     Reshape the flat snapshot["players"] list into
-        {model_team_name: [player_row, ...]}
+        ({model_team_name: [player_row, ...]}, thresholds, teams_named)
     where each list is sorted by projected mean disposals DESC.
-    Pre-sorting once is much cheaper than re-sorting inside every game card.
 
-    Keeps LIKELY players (played in last 2 rounds) and UNCERTAIN players
-    (played 3-4 rounds ago — possibly back from injury). Drops STALE
-    (5+ rounds out, not in rotation) and confirmed OUT players, since
-    those won't take the field this round.
+    Two distinct modes depending on whether team lists have dropped:
 
-    Returns ({}, []) if the snapshot is empty, otherwise (by_team, thresholds).
+    1. PRE-TEAM-LISTS mode (no player has selection_status set):
+       Show LIKELY + UNCERTAIN buckets. The model surfaces every player
+       who could play, sorted by projected mean. This is the speculative
+       view: "here's the pool, anyone in it might play".
+
+    2. POST-TEAM-LISTS mode (at least one player has selection_status
+       in {named, emergency}):
+       Show ONLY players with selection_status "named" or "emergency".
+       The 23 + emergencies are confirmed; the rest of the pool is
+       irrelevant noise. Showing it would hurt trust — punters care
+       about who's playing, not who could have played.
+
+    The `teams_named` boolean tells the renderer which mode we're in
+    so it can show a "TEAMS NAMED" status badge.
+
+    Returns ({}, [], False) when the snapshot is empty.
     """
     if not snapshot:
-        return {}, []
+        return {}, [], False
     thresholds = [int(t) for t in snapshot.get("thresholds") or []]
     players = snapshot.get("players") or []
+
+    # ── Detect whether team lists have been applied ──
+    # The model sets selection_status to 'named' / 'emergency' / 'out'
+    # ONLY when the team-selections page is for the same round as the
+    # projection. If we see ANY of those statuses, we know team lists
+    # have been applied and we should switch to the confirmed-23 view.
+    teams_named = any(
+        p.get("selection_status") in ("named", "emergency", "out")
+        for p in players
+    )
+
     by_team = defaultdict(list)
     for p in players:
-        # Drop STALE (rotation absentees) and explicit OUTs. UNCERTAIN
-        # players are kept — they might be back, and showing them gives
-        # the punter the full picture of who could play.
-        if p.get("bucket") in ("out", "stale"):
-            continue
+        # Always drop confirmed OUTs — they're not playing this week.
+        # The model also moves them to bucket=="out" via Stage 4, so
+        # both checks are belt-and-braces.
         if p.get("selection_status") == "out":
             continue
+        if p.get("bucket") == "out":
+            continue
+
+        if teams_named:
+            # Post-team-lists: ONLY show named + emergencies. Anyone
+            # the model had in LIKELY but the club didn't pick gets
+            # filtered out — they're not playing, no point showing
+            # their projections this week.
+            sel = p.get("selection_status")
+            if sel not in ("named", "emergency"):
+                continue
+        else:
+            # Pre-team-lists: drop STALE (5+ rounds out, not in
+            # rotation). Keep LIKELY + UNCERTAIN — anyone in those
+            # buckets is plausibly going to play.
+            if p.get("bucket") == "stale":
+                continue
+
         by_team[p["team"]].append(p)
+
     # Sort each team's list by projected mean desc — that's the "biggest
     # ball-winner" view the punter actually wants.
     for team, plist in by_team.items():
         plist.sort(key=lambda r: r.get("mean", 0), reverse=True)
-    return dict(by_team), thresholds
+    return dict(by_team), thresholds, teams_named
 
 
 def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
-                          player_id_lookup=None):
+                          player_id_lookup=None, teams_named=False):
     """
     Build the per-game disposal-projection HTML block. Returns "" if data
     for this match is missing, so it hides itself cleanly inside a game
@@ -7096,7 +7246,7 @@ def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
             f'  <span class="mc-disp-cell mc-disp-cell-shot" data-conviction="{conv_tier}">'
             f'    {_shot_html(name)}'
             f'  </span>'
-            f'  <span class="mc-disp-cell mc-disp-cell-name">'
+            f'  <span class="mc-disp-cell mc-disp-cell-name" data-avg="{season_avg:.1f}">'
             f'    <span class="mc-disp-name">{name}</span>'
             f'    {flags_html}'
             f'  </span>'
@@ -7153,160 +7303,6 @@ def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
                                   home_logo, home_players)
     away_section = _team_section(away_app_name, away_abbr_s, away_accent,
                                   away_logo, away_players)
-
-    # Threshold-picking helper: snaps a target value (e.g. 22) to the
-    # nearest available threshold in the model's actual threshold set.
-    # The model carries [16,18,20,22,24,26,28,30,32,34], so _pick(22)
-    # returns 22 directly; _pick(25) would return 24 (closer than 26).
-    # Used by the match-stats and top-edge logic below to anchor their
-    # aggregates to specific real thresholds without hard-coding.
-    def _pick(target):
-        return min(show_thresholds, key=lambda t: abs(t - target))
-
-    # ── MATCH STATS BANNER ──
-    # One-line summary across BOTH teams: how many actionable cells
-    # exist in this game and who the top μ projection is. Sits at the
-    # very top of the open panel so a punter who only has 3 seconds
-    # gets the headline before scanning any row.
-    #
-    # We count using P(>=22) which is the "they'll have a decent game"
-    # threshold — well above the noise floor (everyone clears 16, most
-    # clear 18-20) but achievable enough that the counts stay meaningful.
-    # If we used P(>=30) every game would show 1-2 locks max; using
-    # P(>=22) gives genuine separation between high-edge games (where
-    # both teams have lots of high-output players) and low-edge games.
-    all_match_players = list(home_players) + list(away_players)
-    stat_threshold_key = str(_pick(22))  # "they'll have a decent game"
-    stat_threshold_val = _pick(22)
-
-    locks_n = sum(1 for p in all_match_players
-                  if float(p.get("probs", {}).get(stat_threshold_key, 0)) >= 0.90)
-    edges_n = sum(1 for p in all_match_players
-                  if 0.70 <= float(p.get("probs", {}).get(stat_threshold_key, 0)) < 0.90)
-    warms_n = sum(1 for p in all_match_players
-                  if 0.50 <= float(p.get("probs", {}).get(stat_threshold_key, 0)) < 0.70)
-
-    # Find the highest-μ player across both teams — that's the "top
-    # ball-magnet" of the match, the punter's most likely 30+ bet.
-    if all_match_players:
-        top_mu_player = max(all_match_players, key=lambda p: p.get("mean", 0))
-        top_mu_name = top_mu_player["player"]
-        top_mu_val = top_mu_player.get("mean", 0)
-        # Which team — colour the chip accordingly via the team accent.
-        top_mu_team = top_mu_player.get("team", "")
-        top_mu_accent = (home_accent if top_mu_team == home_model
-                         else away_accent)
-        top_mu_abbr = (home_abbr_s if top_mu_team == home_model
-                       else away_abbr_s)
-    else:
-        top_mu_name = None
-
-    match_stats_html = (
-        '<div class="mc-disp-stats-banner">'
-        '<div class="mc-disp-stats-grp">'
-        '<div class="mc-disp-stats-counts">'
-        f'<span class="mc-disp-stats-count mc-disp-stats-count-lock">'
-        f'<span class="mc-disp-stats-n">{locks_n}</span>'
-        f'<span class="mc-disp-stats-lbl">LOCKS</span></span>'
-        f'<span class="mc-disp-stats-count mc-disp-stats-count-edge">'
-        f'<span class="mc-disp-stats-n">{edges_n}</span>'
-        f'<span class="mc-disp-stats-lbl">EDGES</span></span>'
-        f'<span class="mc-disp-stats-count mc-disp-stats-count-warm">'
-        f'<span class="mc-disp-stats-n">{warms_n}</span>'
-        f'<span class="mc-disp-stats-lbl">WARM</span></span>'
-        '</div>'
-        f'<span class="mc-disp-stats-sub">@ ≥{stat_threshold_val} disposals</span>'
-        '</div>'
-    )
-    if top_mu_name:
-        match_stats_html += (
-            '<div class="mc-disp-stats-top">'
-            '<span class="mc-disp-stats-top-lbl">TOP μ</span>'
-            f'<span class="mc-disp-stats-top-team" '
-            f'      style="color:{top_mu_accent};">{top_mu_abbr}</span>'
-            f'<span class="mc-disp-stats-top-name">{top_mu_name}</span>'
-            f'<span class="mc-disp-stats-top-val">{top_mu_val:.1f}</span>'
-            '</div>'
-        )
-    match_stats_html += '</div>'
-
-    # ── TOP EDGE CALLOUT CARDS ──
-    # Three highest-P(>=30) players in the game, shown as standout cards
-    # at the top of the panel. Answers the punter's first question:
-    # "who's the safest 30+ bet here?" before they read any row.
-    #
-    # Each card carries: rank chip, headshot (with the same conviction
-    # ring as the row below), name+team chip, projected μ, and the two
-    # headline probability cells (>=26 and >=30) sized for impact.
-    #
-    # Only renders if at least one player has P(>=30) >= 50% — otherwise
-    # this isn't a high-edge game and showing dim cards would just clutter.
-    t30_key = str(_pick(30))
-    t26_key = str(_pick(26))
-    t30_val = _pick(30)
-    t26_val = _pick(26)
-    top_edge_pool = sorted(all_match_players,
-                            key=lambda p: float(p.get("probs", {}).get(t30_key, 0)),
-                            reverse=True)
-    top_3 = top_edge_pool[:3]
-    has_real_edge = (top_3 and
-                     float(top_3[0].get("probs", {}).get(t30_key, 0)) >= 0.50)
-
-    if has_real_edge:
-        edge_cards = []
-        for rank, p in enumerate(top_3, 1):
-            ep_name = p["player"]
-            ep_mu = p.get("mean", 0)
-            ep_team = p.get("team", "")
-            ep_accent = (home_accent if ep_team == home_model else away_accent)
-            ep_abbr = (home_abbr_s if ep_team == home_model else away_abbr_s)
-            ep_conv = _conviction_tier(ep_mu)
-            p30 = float(p.get("probs", {}).get(t30_key, 0))
-            p26 = float(p.get("probs", {}).get(t26_key, 0))
-            pct30 = int(round(p30 * 100))
-            pct26 = int(round(p26 * 100))
-            tier30 = _prob_tier(p30)
-            tier26 = _prob_tier(p26)
-            edge_cards.append(
-                f'<div class="mc-disp-edge-card" data-conviction="{ep_conv}" '
-                f'     style="--team-accent:{ep_accent};">'
-                f'  <div class="mc-disp-edge-rank">#{rank}</div>'
-                f'  <div class="mc-disp-edge-shot" data-conviction="{ep_conv}">'
-                f'    {_shot_html(ep_name)}'
-                f'  </div>'
-                f'  <div class="mc-disp-edge-info">'
-                f'    <div class="mc-disp-edge-name">{ep_name}</div>'
-                f'    <div class="mc-disp-edge-meta">'
-                f'      <span class="mc-disp-edge-team" style="color:{ep_accent};">{ep_abbr}</span>'
-                f'      <span class="mc-disp-edge-sep">·</span>'
-                f'      <span class="mc-disp-edge-mu">μ {ep_mu:.1f}</span>'
-                f'    </div>'
-                f'  </div>'
-                f'  <div class="mc-disp-edge-probs">'
-                f'    <div class="mc-disp-edge-prob mc-disp-edge-prob-primary mc-disp-prob-{tier30}">'
-                f'      <div class="mc-disp-edge-prob-num">{pct30}<small>%</small></div>'
-                f'      <div class="mc-disp-edge-prob-lbl">≥{t30_val}</div>'
-                f'    </div>'
-                f'    <div class="mc-disp-edge-prob mc-disp-edge-prob-secondary mc-disp-prob-{tier26}">'
-                f'      <div class="mc-disp-edge-prob-num">{pct26}<small>%</small></div>'
-                f'      <div class="mc-disp-edge-prob-lbl">≥{t26_val}</div>'
-                f'    </div>'
-                f'  </div>'
-                f'</div>'
-            )
-        top_edge_html = (
-            '<div class="mc-disp-edge-strip">'
-            '<div class="mc-disp-edge-strip-head">'
-            '<span class="mc-disp-edge-strip-glyph">◆</span>'
-            '<span class="mc-disp-edge-strip-title">Top Edge</span>'
-            f'<span class="mc-disp-edge-strip-sub">highest P(≥{t30_val}) in match</span>'
-            '</div>'
-            f'<div class="mc-disp-edge-cards">{"".join(edge_cards)}</div>'
-            '</div>'
-        )
-    else:
-        top_edge_html = ''
-
     foot = (
         '<div class="mc-disp-foot">'
         '<div class="mc-disp-foot-tiers">'
@@ -7328,15 +7324,41 @@ def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
         '</div>'
     )
 
+    # Status badge — tells the punter at a glance whether the panel is
+    # showing the model's projected pool (pre-team-lists) or the
+    # confirmed 23 + emergencies (post-team-lists). Same one-line
+    # signal as a Bloomberg "LIVE" vs "DELAYED" tape badge. When
+    # teams_named is False the badge is dimmer + slightly less
+    # prominent — pre-team-list data is still useful, just less
+    # certain. When True it lights up green so the user knows what
+    # they're seeing is locked in.
+    if teams_named:
+        status_badge_html = (
+            '<span class="mc-disp-status mc-disp-status-named" '
+            'title="Team lists have dropped — showing the 23 + emergencies">'
+            '<span class="mc-disp-status-dot"></span>'
+            'TEAMS NAMED'
+            '</span>'
+        )
+    else:
+        status_badge_html = (
+            '<span class="mc-disp-status mc-disp-status-pool" '
+            'title="Team lists not yet released — showing the model\'s projected pool">'
+            '<span class="mc-disp-status-dot"></span>'
+            'PROJECTED POOL'
+            '</span>'
+        )
+
     return _h(f"""
     <details class="mc-disp-disclosure">
       <summary class="mc-disp-summary">
-        <span class="mc-disp-sum-title">Player Disposals Predictor</span>
+        <span class="mc-disp-sum-left">
+          <span class="mc-disp-sum-title">Player Disposals Predictor</span>
+          {status_badge_html}
+        </span>
         <span class="mc-disp-sum-chevron">›</span>
       </summary>
       <div class="mc-disp-body">
-        {match_stats_html}
-        {top_edge_html}
         <div class="mc-disp-hscroll">
           <div class="mc-disp-table">
             {home_section}
@@ -7420,6 +7442,76 @@ st.markdown("""
 }
 .mc-disp-disclosure:hover .mc-disp-sum-title,
 .mc-disp-disclosure[open] .mc-disp-sum-title{color:var(--white);}
+
+/* ── SUMMARY HEADER: TITLE + STATUS BADGE WRAPPER ──
+   Holds the "Player Disposals Predictor" title and the LIVE-or-not
+   status badge side by side on the left of the summary row. */
+.mc-disp-sum-left{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  min-width:0;  /* lets the badge text truncate cleanly on tiny phones */
+}
+
+/* ── STATUS BADGE ──
+   TEAMS NAMED (green, lit) = confirmed 23 + emergencies are showing.
+   PROJECTED POOL (neutral grey) = pre-team-list pool of likely players.
+   Same shape both states; only the colour shifts. The dot ▮ on the left
+   pulses gently in the named state so the badge reads as "live signal". */
+.mc-disp-status{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  padding:2px 7px 3px;
+  border-radius:3px;
+  font-family:var(--mono);
+  font-size:0.42rem; font-weight:800;
+  letter-spacing:0.10em;
+  text-transform:uppercase;
+  line-height:1;
+  cursor:help;
+}
+.mc-disp-status-dot{
+  display:inline-block;
+  width:5px; height:5px;
+  border-radius:50%;
+}
+.mc-disp-status-named{
+  color:var(--green);
+  background:rgba(52,211,153,0.10);
+  box-shadow:inset 0 0 0 1px rgba(52,211,153,0.32);
+  text-shadow:0 0 5px rgba(52,211,153,0.40);
+}
+.mc-disp-status-named .mc-disp-status-dot{
+  background:var(--green);
+  box-shadow:0 0 6px rgba(52,211,153,0.70);
+  animation:mc-disp-status-pulse 2.4s ease-in-out infinite;
+}
+@keyframes mc-disp-status-pulse{
+  0%, 100%{opacity:0.85; box-shadow:0 0 4px rgba(52,211,153,0.50);}
+  50%     {opacity:1;    box-shadow:0 0 10px rgba(52,211,153,0.90);}
+}
+.mc-disp-status-pool{
+  color:var(--text2);
+  background:rgba(255,255,255,0.04);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.10);
+}
+.mc-disp-status-pool .mc-disp-status-dot{
+  background:var(--text3);
+  /* No pulse — pool state is calmer, less urgent. */
+}
+
+/* Mobile: the badge can crowd the summary on a 360px screen. Drop
+   the letter-spacing and shrink slightly so the title + badge fit
+   the row without wrapping awkwardly. */
+@media (max-width:560px){
+  .mc-disp-sum-left{gap:6px;}
+  .mc-disp-status{
+    font-size:0.38rem;
+    letter-spacing:0.06em;
+    padding:2px 5px 3px;
+  }
+}
 .mc-disp-sum-chevron{
   font-size:0.78rem; font-weight:300;
   color:var(--text3);
@@ -7447,319 +7539,6 @@ st.markdown("""
   from{opacity:0; transform:translateY(-3px);}
   to{opacity:1; transform:translateY(0);}
 }
-
-/* ══════════════════════════════════════════════════════════════════════
-   MATCH STATS BANNER — first row in the open panel
-   ══════════════════════════════════════════════════════════════════════
-   A one-line headline that summarises the whole match at a glance:
-   how many LOCKS / EDGES / WARM cells exist at the @ ≥22 threshold,
-   and who the top μ player in the game is. Lets a punter who only
-   has 3 seconds answer "is this game worth a deeper look?" without
-   reading any row. */
-.mc-disp-stats-banner{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  flex-wrap:wrap;
-  gap:14px;
-  padding:11px 14px;
-  background:linear-gradient(180deg,
-    rgba(79,143,255,0.04) 0%,
-    transparent 100%);
-  border-bottom:1px solid var(--border);
-  animation:mc-disp-banner-in 0.42s ease-out both;
-}
-@keyframes mc-disp-banner-in{
-  from{opacity:0; transform:translateY(-2px);}
-  to{opacity:1; transform:translateY(0);}
-}
-.mc-disp-stats-grp{
-  display:flex; align-items:center; gap:10px;
-  flex-wrap:wrap;
-}
-.mc-disp-stats-counts{
-  display:flex; align-items:center; gap:8px;
-}
-.mc-disp-stats-count{
-  display:inline-flex; align-items:baseline; gap:4px;
-  padding:3px 8px 4px;
-  border-radius:4px;
-  font-family:var(--mono);
-  /* Tier styling pulled from the same palette as the prob cells —
-     so "LOCKS" reads visually as the same green you see in the
-     90%+ probability tiles below. */
-}
-.mc-disp-stats-n{
-  font-size:0.92rem; font-weight:800;
-  font-variant-numeric:tabular-nums;
-  line-height:1;
-  letter-spacing:0;
-}
-.mc-disp-stats-lbl{
-  font-size:0.48rem; font-weight:700;
-  letter-spacing:0.14em;
-  text-transform:uppercase;
-  opacity:0.85;
-}
-.mc-disp-stats-count-lock{
-  background:rgba(52,211,153,0.08);
-  box-shadow:inset 0 0 0 1px rgba(52,211,153,0.30);
-  color:var(--green);
-  text-shadow:0 0 8px rgba(52,211,153,0.40);
-}
-.mc-disp-stats-count-edge{
-  background:rgba(79,143,255,0.07);
-  box-shadow:inset 0 0 0 1px rgba(79,143,255,0.28);
-  color:var(--accent);
-  text-shadow:0 0 6px rgba(79,143,255,0.35);
-}
-.mc-disp-stats-count-warm{
-  background:rgba(251,191,36,0.07);
-  box-shadow:inset 0 0 0 1px rgba(251,191,36,0.28);
-  color:var(--amber);
-  text-shadow:0 0 5px rgba(251,191,36,0.32);
-}
-.mc-disp-stats-sub{
-  font-family:var(--mono);
-  font-size:0.46rem; font-weight:600;
-  letter-spacing:0.10em;
-  text-transform:uppercase;
-  color:var(--text3);
-}
-.mc-disp-stats-top{
-  display:flex; align-items:center; gap:7px;
-  font-family:var(--mono);
-}
-.mc-disp-stats-top-lbl{
-  font-size:0.46rem; font-weight:700;
-  letter-spacing:0.14em;
-  text-transform:uppercase;
-  color:var(--text3);
-}
-.mc-disp-stats-top-team{
-  font-size:0.62rem; font-weight:800;
-  letter-spacing:0.06em;
-}
-.mc-disp-stats-top-name{
-  font-size:0.6rem; font-weight:700;
-  color:var(--white);
-}
-.mc-disp-stats-top-val{
-  font-size:0.66rem; font-weight:800;
-  font-variant-numeric:tabular-nums;
-  color:var(--green);
-  text-shadow:0 0 6px rgba(52,211,153,0.40);
-  padding:2px 6px;
-  border-radius:3px;
-  background:rgba(52,211,153,0.08);
-  box-shadow:inset 0 0 0 1px rgba(52,211,153,0.22);
-}
-
-/* ══════════════════════════════════════════════════════════════════════
-   TOP EDGE STRIP — three cards across the panel
-   ══════════════════════════════════════════════════════════════════════
-   The three highest-confidence P(≥30) picks in the match, surfaced as
-   standout cards above the full roster. This is the "what do I bet?"
-   headline — a punter reads these first, then drops into the table for
-   the supporting picture. Only renders when there's a real edge in the
-   game (top pick ≥50% for ≥30 disposals); games with no real edge get
-   no callout, no false signal. */
-.mc-disp-edge-strip{
-  padding:12px 14px 14px;
-  border-bottom:1px solid var(--border);
-  /* No background — let the cards themselves carry the visual weight
-     against the panel's bg2 wash. */
-}
-.mc-disp-edge-strip-head{
-  display:flex; align-items:center; gap:8px;
-  margin-bottom:10px;
-}
-.mc-disp-edge-strip-glyph{
-  color:var(--accent);
-  font-size:0.6rem;
-  /* Subtle pulse so the glyph reads as "live signal" rather than static
-     decoration. 3s loop, very gentle — never distracting. */
-  filter:drop-shadow(0 0 4px rgba(79,143,255,0.55));
-  animation:mc-disp-glyph-pulse 3.6s ease-in-out infinite;
-}
-@keyframes mc-disp-glyph-pulse{
-  0%, 100%{opacity:0.9; filter:drop-shadow(0 0 3px rgba(79,143,255,0.45));}
-  50%{opacity:1; filter:drop-shadow(0 0 7px rgba(79,143,255,0.75));}
-}
-.mc-disp-edge-strip-title{
-  font-family:var(--mono);
-  font-size:0.58rem; font-weight:800;
-  letter-spacing:0.18em;
-  text-transform:uppercase;
-  color:var(--white);
-}
-.mc-disp-edge-strip-sub{
-  font-family:var(--mono);
-  font-size:0.46rem; font-weight:600;
-  letter-spacing:0.10em;
-  text-transform:uppercase;
-  color:var(--text3);
-}
-.mc-disp-edge-cards{
-  display:grid;
-  grid-template-columns:repeat(3, 1fr);
-  gap:10px;
-}
-/* ── EDGE CARD ──
-   Per-pick card with rank chip, headshot (carrying the conviction ring),
-   name+team meta block, and two prominent probability tiles (≥30 as
-   the headline, ≥26 as supporting). The team's accent colour runs as
-   a 2px stripe on the left edge so each card visually belongs to its
-   team without needing logo chrome. */
-.mc-disp-edge-card{
-  display:grid;
-  grid-template-columns:auto 40px 1fr auto;
-  align-items:center;
-  gap:9px;
-  padding:9px 11px;
-  background:var(--card);
-  border:1px solid var(--border);
-  border-left:2px solid var(--team-accent);
-  border-radius:5px;
-  transition:transform 0.22s ease, border-color 0.22s ease,
-             box-shadow 0.22s ease, background 0.22s ease;
-  animation:mc-disp-card-in 0.5s ease-out both;
-}
-.mc-disp-edge-card:nth-child(1){animation-delay:0.05s;}
-.mc-disp-edge-card:nth-child(2){animation-delay:0.13s;}
-.mc-disp-edge-card:nth-child(3){animation-delay:0.21s;}
-@keyframes mc-disp-card-in{
-  from{opacity:0; transform:translateY(4px);}
-  to{opacity:1; transform:translateY(0);}
-}
-.mc-disp-edge-card:hover{
-  transform:translateY(-2px);
-  border-color:color-mix(in srgb, var(--team-accent) 50%, var(--border));
-  box-shadow:
-    0 4px 16px rgba(0,0,0,0.35),
-    0 0 12px color-mix(in srgb, var(--team-accent) 18%, transparent);
-}
-.mc-disp-edge-rank{
-  font-family:var(--mono);
-  font-size:0.6rem; font-weight:800;
-  letter-spacing:0.04em;
-  color:var(--team-accent);
-  line-height:1;
-  /* Subtle vertical bar look — feels like a stock-ticker rank chip */
-  padding:0 2px;
-}
-/* The edge card's headshot reuses the same .mc-disp-shot disc as
-   the rows below. The wrapping .mc-disp-edge-shot uses the same
-   data-conviction trick so the ring colour matches the conviction
-   tier (defined in the existing .mc-disp-cell-shot[data-conviction]
-   rules). Sized slightly larger (40px) for impact in the card. */
-.mc-disp-edge-shot{
-  display:inline-flex;
-  width:40px; height:40px;
-}
-.mc-disp-edge-shot .mc-disp-shot{
-  width:40px; height:40px;
-}
-.mc-disp-edge-shot .mc-disp-shot-initials{
-  font-size:0.62rem;
-}
-/* Apply the same conviction-ring colour treatment as the row-level
-   .mc-disp-cell-shot — but matching on .mc-disp-edge-shot too, so
-   the same data-conviction attr drives both contexts. */
-.mc-disp-edge-shot[data-conviction="lock"] .mc-disp-shot{
-  background:radial-gradient(circle at 50% 35%,
-    rgba(52,211,153,0.22) 0%,
-    rgba(52,211,153,0.04) 55%,
-    rgba(52,211,153,0) 100%);
-  border:1px solid rgba(52,211,153,0.45);
-  box-shadow:
-    inset 0 1px 0 rgba(52,211,153,0.10),
-    0 0 8px rgba(52,211,153,0.35);
-}
-.mc-disp-edge-shot[data-conviction="edge"] .mc-disp-shot{
-  background:radial-gradient(circle at 50% 35%,
-    rgba(79,143,255,0.20) 0%,
-    rgba(79,143,255,0.04) 55%,
-    rgba(79,143,255,0) 100%);
-  border:1px solid rgba(79,143,255,0.42);
-  box-shadow:
-    inset 0 1px 0 rgba(79,143,255,0.10),
-    0 0 7px rgba(79,143,255,0.30);
-}
-.mc-disp-edge-shot[data-conviction="warm"] .mc-disp-shot{
-  background:radial-gradient(circle at 50% 35%,
-    rgba(251,191,36,0.18) 0%,
-    rgba(251,191,36,0.04) 55%,
-    rgba(251,191,36,0) 100%);
-  border:1px solid rgba(251,191,36,0.42);
-  box-shadow:
-    inset 0 1px 0 rgba(251,191,36,0.10),
-    0 0 6px rgba(251,191,36,0.28);
-}
-.mc-disp-edge-info{
-  display:flex; flex-direction:column;
-  gap:3px;
-  min-width:0;
-}
-.mc-disp-edge-name{
-  font-family:var(--mono);
-  font-size:0.62rem; font-weight:700;
-  color:var(--white);
-  letter-spacing:0.01em;
-  line-height:1.15;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-.mc-disp-edge-meta{
-  display:flex; align-items:center; gap:5px;
-  font-family:var(--mono);
-  font-size:0.48rem; font-weight:600;
-  letter-spacing:0.04em;
-  line-height:1;
-}
-.mc-disp-edge-team{
-  font-weight:800;
-}
-.mc-disp-edge-sep{color:var(--text3); opacity:0.5;}
-.mc-disp-edge-mu{
-  color:var(--text2);
-  font-variant-numeric:tabular-nums;
-}
-.mc-disp-edge-probs{
-  display:flex; gap:7px;
-}
-.mc-disp-edge-prob{
-  display:flex; flex-direction:column;
-  align-items:flex-end;
-  gap:2px;
-  padding:3px 6px;
-  border-radius:3px;
-}
-.mc-disp-edge-prob-num{
-  font-family:var(--mono);
-  font-weight:800;
-  font-variant-numeric:tabular-nums;
-  line-height:1;
-}
-.mc-disp-edge-prob-num small{
-  font-size:0.58em;
-  opacity:0.65;
-  margin-left:1px;
-  font-weight:500;
-}
-.mc-disp-edge-prob-lbl{
-  font-family:var(--mono);
-  font-size:0.4rem; font-weight:700;
-  letter-spacing:0.10em;
-  color:var(--text3);
-}
-.mc-disp-edge-prob-primary .mc-disp-edge-prob-num{font-size:0.86rem;}
-.mc-disp-edge-prob-secondary .mc-disp-edge-prob-num{font-size:0.7rem;}
-/* The edge-prob tiles reuse the same .mc-disp-prob-lock/edge/warm/dim
-   classes as the row cells, so palette + glow are inherited
-   automatically — no duplication, palette can never drift. */
-
 /* ══════════════════════════════════════════════════════════════════════
    FORM-DELTA CHIP — appears inside the μ cell when projection diverges
    2+ disposals from season average. Tells the punter "the model is
@@ -7792,26 +7571,8 @@ st.markdown("""
   text-shadow:0 0 4px rgba(248,113,113,0.40);
 }
 
-/* Mobile tightening for the new components ─────────────────────────── */
+/* Mobile tightening for the form-delta chip ────────────────────────── */
 @media (max-width:560px){
-  .mc-disp-stats-banner{
-    flex-direction:column;
-    align-items:flex-start;
-    gap:8px;
-    padding:9px 11px;
-  }
-  .mc-disp-stats-n{font-size:0.78rem;}
-  .mc-disp-stats-top{flex-wrap:wrap;}
-  .mc-disp-edge-cards{
-    grid-template-columns:1fr;
-    gap:7px;
-  }
-  .mc-disp-edge-strip{padding:10px 11px 11px;}
-  .mc-disp-edge-card{padding:8px 9px;}
-  .mc-disp-edge-shot{width:34px; height:34px;}
-  .mc-disp-edge-shot .mc-disp-shot{width:34px; height:34px;}
-  .mc-disp-edge-prob-primary .mc-disp-edge-prob-num{font-size:0.74rem;}
-  .mc-disp-edge-prob-secondary .mc-disp-edge-prob-num{font-size:0.62rem;}
   .mc-disp-delta{font-size:0.44rem; padding:0 3px 1px;}
 }
 
@@ -7841,15 +7602,26 @@ st.markdown("""
    container. It hides on mobile only when scrolled to the end. */
 .mc-disp-hscroll{
   position:relative;
+  /* Two-axis scroll. Without max-height the panel grew to ~3000px+ on
+     games with full squads, dwarfing every other section of the card.
+     Capping at 560px (desktop) keeps the panel manageable while still
+     showing ~12 rows of data at a glance. Mobile cap is slightly
+     tighter (480px) since phone viewports are taller-but-narrower. */
+  max-height:560px;
   overflow-x:auto;
-  overflow-y:visible;
-  overscroll-behavior-x:contain;
+  overflow-y:auto;
+  /* contain on both axes — swipes never bleed into the parent page
+     scroll or the iOS edge-swipe back gesture. */
+  overscroll-behavior:contain;
   -webkit-overflow-scrolling:touch;
-  touch-action:pan-x;
+  /* pan-y AND pan-x — user can swipe in either direction inside this
+     container, and the gesture stays here instead of fighting the
+     page scroll. Critical for the new dual-axis scroll behaviour. */
+  touch-action:pan-y pan-x;
   scrollbar-width:thin;
   scrollbar-color:rgba(255,255,255,0.12) transparent;
 }
-.mc-disp-hscroll::-webkit-scrollbar{height:6px;}
+.mc-disp-hscroll::-webkit-scrollbar{height:6px; width:6px;}
 .mc-disp-hscroll::-webkit-scrollbar-track{background:transparent;}
 .mc-disp-hscroll::-webkit-scrollbar-thumb{
   background:rgba(255,255,255,0.10);
@@ -7869,8 +7641,14 @@ st.markdown("""
 }
 
 /* ── TEAM SECTION BANNER ──
-   One per team. NOT sticky — the punter said "don't make the table
-   move". Banner just sits where it is and the user scrolls past it. */
+   One per team. Sticky on BOTH axes inside the scroll container:
+     • top:0 — when the user scrolls DOWN through a long team roster,
+       the banner stays pinned at the top of the visible scroll area
+       so they always know which team's section they're looking at.
+     • left:0 — when the user swipes RIGHT to see higher thresholds,
+       the banner stays anchored to the visible-left edge instead of
+       scrolling off into the columns.
+   z-index:7 keeps it above the column header (which also sticks). */
 .mc-disp-sect-banner{
   display:flex; align-items:center; justify-content:space-between;
   padding:10px 14px;
@@ -7879,14 +7657,13 @@ st.markdown("""
     var(--card) 100%);
   border-bottom:1px solid var(--border2);
   border-left:3px solid var(--team-accent);
-  /* width:100% locks the banner to the viewport so it never extends
-     into the horizontal scroll zone — it's a section divider, not
-     part of the scrollable table. */
   position:sticky;
+  top:0;
   left:0;
   width:max-content;
   min-width:100%;
   box-sizing:border-box;
+  z-index:7;
 }
 .mc-disp-sect-l{
   display:flex; align-items:center; gap:8px;
@@ -7953,15 +7730,50 @@ st.markdown("""
 }
 .mc-disp-colhead{
   background:var(--bg2);
-  border-bottom:1px solid var(--border2);
-  padding-top:8px; padding-bottom:8px;
+  /* Heavier divider underneath — this header bar IS the spreadsheet
+     header, give it actual weight as a divider. The 2px accent ramp
+     reads as "data starts here". */
+  border-bottom:2px solid color-mix(in srgb, var(--accent2) 30%, var(--border2));
+  padding-top:9px;
+  padding-bottom:9px;
+  /* Sticky below the team banner — when scrolling vertically through
+     a long roster, the column labels never disappear above the fold.
+     top:42px matches the team banner's measured height. */
+  position:sticky;
+  top:42px;
+  z-index:6;
+  /* Subtle inset highlight at top so the header bar feels lifted —
+     small touch but it makes the header read as a distinct band
+     rather than blending into the row above it. */
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.03);
 }
 .mc-disp-colhead .mc-disp-cell{
   font-family:var(--mono);
-  font-size:0.44rem; font-weight:700;
+  /* Bumped from 0.44 → 0.55 — was too small to read at a glance.
+     The column headers are the punter's anchor when scanning a
+     specific threshold down the column; they need to be readable. */
+  font-size:0.55rem; font-weight:800;
   letter-spacing:0.12em; text-transform:uppercase;
-  color:var(--text3);
+  /* Switched from dim text3 to text2 — brighter, more authoritative.
+     The threshold cells get their own accent-coloured treatment below. */
+  color:var(--text2);
   line-height:1;
+}
+/* Threshold column labels (≥16 .. ≥34) get the punchiest treatment of
+   all the header cells — they're THE columns the punter is here for.
+   Brighter colour, slightly heavier weight, subtle text-shadow glow
+   so they read as anchored data labels rather than dim chrome. */
+.mc-disp-prob-h{
+  color:var(--white) !important;
+  font-variant-numeric:tabular-nums;
+  text-shadow:0 0 4px rgba(167,139,250,0.20);
+}
+/* Player + AVG + μ header labels stay slightly quieter than the
+   threshold columns — they're descriptive, not the headline data. */
+.mc-disp-colhead .mc-disp-cell-name,
+.mc-disp-colhead .mc-disp-cell-avg,
+.mc-disp-colhead .mc-disp-cell-mean{
+  color:var(--text2);
 }
 .mc-disp-cell-avg,
 .mc-disp-cell-mean,
@@ -8452,106 +8264,236 @@ st.markdown("""
 
 /* ── MOBILE — same horizontal-scroll story, slightly tighter sizes ─── */
 @media (max-width:560px){
+  /* ══════════════════════════════════════════════════════════════════
+     MOBILE LAYOUT — REDESIGNED FROM FIRST PRINCIPLES
+     ══════════════════════════════════════════════════════════════════
+     Desktop crams 14 columns into one row: headshot, name+flags, AVG,
+     μ, then 10 threshold cells. On a 360px phone this either stacks
+     awkwardly or compresses to illegibility. The mobile redesign keeps
+     all the same information but rearranges:
+
+       1. AVG column is HIDDEN from the primary grid. Reference data,
+          not headline data, doesn't deserve a primary column on a tiny
+          screen.
+       2. NAME CELL becomes a two-line block:
+            [Player Name bold              ]
+            [avg 26.8  ▲+5.8  *  T  NAMED  ]
+          The avg number, form-delta chip, and inline flag tags all
+          live on the secondary line — clearly subordinate to the name
+          but still surfaced.
+       3. μ KEEPS its own column as the headline projection number.
+       4. ROW HEIGHT ~64px accommodates the two-line block without
+          looking like a balloon.
+       5. THRESHOLD CELLS get slightly more horizontal space since AVG
+          is gone — 44px each, easier to read at scroll.
+
+     The result: same information density as desktop, but laid out for
+     thumbs and small viewports instead of mice and 1440px panels. */
+
+  /* PRIMARY GRID — 13 columns now (no AVG cell in the visible grid).
+     The AVG cell still exists in the HTML (so desktop renders it) but
+     we display:none it below — keeping the grid count consistent in
+     the cascade by NOT counting that column here. */
   .mc-disp-colhead,
   .mc-disp-row{
     grid-template-columns:
-      28px
-      minmax(140px, 1fr)
-      40px
-      40px
-      repeat(10, 38px);
-    gap:4px;
-    padding:5px 10px;
-  }
-  .mc-disp-sect-banner{padding:8px 10px;}
-  .mc-disp-sect-abbr{font-size:0.66rem;}
-  .mc-disp-sect-team{display:none;}
-  .mc-disp-shot{width:26px; height:26px;}
-  .mc-disp-shot-initials{font-size:0.48rem;}
-  .mc-disp-name{font-size:0.56rem;}
-  .mc-disp-cell-avg{font-size:0.54rem;}
-  .mc-disp-cell-mean{font-size:0.58rem;}
-  .mc-disp-prob{font-size:0.56rem;}
-  .mc-disp-foot{
+      32px                 /* headshot                             */
+      minmax(150px, 1fr)   /* name block (2 lines on mobile)       */
+      48px                 /* projected μ                          */
+      repeat(10, 44px);    /* 10 threshold cells, breathing room   */
     gap:8px;
-    padding:8px 10px 10px;
-    font-size:0.42rem;
+    padding:10px 14px;
+    align-items:center;
+  }
+  /* Hide the AVG column in the visible grid. The HTML element stays
+     in the DOM so JS / animation logic still finds the same number
+     of cells per row; visually it just doesn't appear. */
+  .mc-disp-cell-avg{display:none !important;}
+
+  /* Match the colhead too — hide its AVG label */
+  .mc-disp-colhead .mc-disp-cell-avg{display:none !important;}
+
+  /* Row height: tall enough for two text lines (name + meta) plus
+     comfortable vertical padding. 64px is one fewer than h2h cards
+     so the panel doesn't feel taller than its siblings. */
+  .mc-disp-row{
+    min-height:64px;
+    padding:11px 14px;
   }
 
-  /* ── MOBILE SWIPE HINT ──
-     The table is wider than the viewport on phones — 10 threshold
-     columns can't physically fit a 360px screen. Without a hint
-     users assume they're already seeing all the data. Two cues:
+  /* ── COLUMN HEADER ──
+     Sticky below the team banner. Mobile banner is ~38px after the
+     padding bump below, so set sticky offset to 38px. Font is bigger
+     than desktop because phone column labels are the punter's anchor. */
+  .mc-disp-colhead{
+    padding:11px 14px;
+    top:38px;
+  }
+  .mc-disp-colhead .mc-disp-cell{
+    font-size:0.58rem;
+    letter-spacing:0.10em;
+  }
+  .mc-disp-prob-h{
+    font-size:0.62rem;
+    font-weight:800;
+  }
 
-     1) RIGHT-EDGE FADE. A vertical gradient on the right edge of
-        the scroll container fades the trailing cells into shadow,
-        creating an obvious "more content this way" visual.
-        Implemented via ::after on .mc-disp-hscroll so it overlays
-        the scrolling content. pointer-events:none lets swipes pass
-        through cleanly.
+  /* ── TEAM BANNER ──
+     The team-chip anchor for the section. Generous padding so the
+     team abbreviation reads as an actual section header. */
+  .mc-disp-sect-banner{
+    padding:11px 14px;
+  }
+  .mc-disp-sect-abbr{
+    font-size:0.72rem;
+    letter-spacing:0.07em;
+  }
+  .mc-disp-sect-team{display:none;}  /* abbr is enough on phone */
 
-     2) SWIPE-CHEVRON. A small "›" appears just inside the right edge
-        with a gentle horizontal nudge animation. Only animates for
-        the first ~6 seconds after the panel opens — long enough for
-        the user to notice, short enough that it never becomes nagging.
-        Hidden permanently once the user has scrolled the panel right
-        (we toggle a data attribute via JS — but as a graceful
-        fallback if JS doesn't run, the animation just stops on its
-        own after the 6-second mark). */
-  .mc-disp-hscroll::after{
-    content:'';
-    position:absolute;
-    top:0; right:0; bottom:0;
+  /* Cap scroll container shorter on phones — viewport is narrower so
+     the panel feels proportionate. */
+  .mc-disp-hscroll{max-height:480px;}
+
+  /* ── HEADSHOT ──
+     Slightly bigger than desktop's 32px because the rest of the row
+     is taller too; a 28px disc in a 64px row would float awkwardly. */
+  .mc-disp-shot{
     width:36px;
-    pointer-events:none;
-    background:linear-gradient(
-      to right,
-      transparent 0%,
-      var(--bg2) 100%
-    );
-    opacity:0.7;
-    z-index:3;
-    transition:opacity 0.25s ease;
+    height:36px;
   }
-  /* Chevron — sits just inside the fade. Pulses to the LEFT (toward
-     the visible content) to convey "drag this content over". CSS
-     animation only — no JS dependency. Auto-dies after 3 iterations
-     (~6s) so it never becomes wallpaper. */
-  .mc-disp-hscroll::before{
-    content:'›';
-    position:absolute;
-    top:50%;
-    right:10px;
-    transform:translateY(-50%);
+  .mc-disp-shot-initials{font-size:0.58rem;}
+
+  /* ── NAME CELL — TWO-LINE BLOCK ──
+     The redesign's centerpiece. On mobile we want:
+
+       Line 1: bold player name (truncates with ellipsis if needed)
+       Line 2: avg 26.8  *  T  NAMED  ← inline subtle meta
+
+     We achieve this WITHOUT restructuring the HTML by using
+     flex-wrap on the cell. The .mc-disp-name child has flex-basis:
+     100% so it claims the entire first line, forcing every sibling
+     (flag spans, sel spans) to wrap onto line 2.
+
+     The season avg ("avg 26.8") is injected via a ::before pseudo-
+     element that reads from the data-avg attribute on the cell —
+     no HTML restructure required, and it sits naturally as the
+     first item on line 2 (followed by the flag/sel spans). */
+  .mc-disp-cell-name{
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    align-content:center;
+    gap:5px 7px;  /* row-gap column-gap */
+    min-width:0;
+    overflow:hidden;
+    /* Cell has its own internal vertical structure now; let it
+       breathe rather than constraining height. */
+    padding:0;
+  }
+  .mc-disp-cell-name .mc-disp-name{
+    /* Force the name onto its own line — flex-basis:100% claims
+       the full row width, so every sibling wraps below it.
+       order:-2 ensures the name comes BEFORE the ::after pseudo
+       (which has order:-1) and the flag children (default order:0). */
+    order:-2;
+    flex-basis:100%;
+    font-size:0.68rem;
+    font-weight:700;
+    color:var(--white);
+    line-height:1.15;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    max-width:100%;
+    letter-spacing:0.005em;
+    /* Reset any whitespace control that affects parent layout */
+    margin:0;
+  }
+  /* Inject "avg X.X" as the first item on the secondary line via
+     ::after (renders after .mc-disp-name in DOM order; because
+     .mc-disp-name has flex-basis:100% and forces a wrap, ::after
+     starts line 2 — followed by the flag/sel spans). Reads from
+     data-avg set in the Python row template. */
+  .mc-disp-cell-name::after{
+    content:'avg ' attr(data-avg);
+    display:inline-block;
     font-family:var(--mono);
-    font-size:1.1rem;
-    font-weight:300;
-    color:var(--accent2);
-    opacity:0;
-    z-index:4;
-    pointer-events:none;
-    text-shadow:0 0 6px rgba(167,139,250,0.5);
-    animation:mc-disp-swipe-hint 1.8s ease-in-out 3 both;
-    animation-delay:0.35s;
+    font-size:0.5rem;
+    font-weight:600;
+    color:var(--text2);
+    letter-spacing:0.04em;
+    font-variant-numeric:tabular-nums;
+    /* order:-1 would put the ::after BEFORE flag siblings on the
+       same line; that's the order we want (avg first, then flags). */
+    order:-1;
   }
-  @keyframes mc-disp-swipe-hint{
-    0%   {opacity:0; transform:translateY(-50%) translateX(0);}
-    20%  {opacity:0.85; transform:translateY(-50%) translateX(0);}
-    50%  {opacity:0.85; transform:translateY(-50%) translateX(-7px);}
-    80%  {opacity:0.85; transform:translateY(-50%) translateX(0);}
-    100% {opacity:0; transform:translateY(-50%) translateX(0);}
+  /* Style the flag + sel spans on the secondary line. Slightly
+     smaller than they'd be inline-after-name on desktop, because
+     they're now nested under the name as caption-tier metadata. */
+  .mc-disp-cell-name > .mc-disp-flag{
+    font-size:0.6rem;
   }
-  /* Once the user has scrolled — even a tiny bit — kill both hints.
-     The data attribute is set by a tiny inline listener (see the JS
-     block elsewhere in the app). If no JS runs, the chevron animation
-     stops on its own (3 iterations); the fade stays but that's fine,
-     it's just a soft edge. */
-  .mc-disp-hscroll[data-scrolled="1"]::before{
-    animation:none;
-    opacity:0;
+  .mc-disp-cell-name > .mc-disp-sel{
+    font-size:0.42rem;
+    padding:1px 5px;
   }
-  .mc-disp-hscroll[data-scrolled="1"]::after{
-    opacity:0.35;
+
+  /* ── PROJECTED μ CELL ──
+     The headline projection — bigger and brighter than desktop's
+     because it's now the SOLE primary metric column. */
+  .mc-disp-cell-mean{
+    font-size:0.78rem;
+    font-weight:800;
+    color:var(--white);
+    text-align:right;
+    /* The form-delta chip is rendered inside this cell on desktop;
+       on mobile we'd ideally move it to the name's meta line, but
+       restructuring the HTML per-viewport is messy. Compromise:
+       on mobile, stack the delta chip BELOW the μ number in the
+       same cell, smaller and tighter. */
+    display:flex;
+    flex-direction:column;
+    align-items:flex-end;
+    gap:2px;
+    line-height:1.1;
+  }
+  /* The form-delta chip inside the μ cell on mobile — small, sits
+     directly below the projection number. */
+  .mc-disp-cell-mean .mc-disp-delta{
+    margin-left:0;
+    font-size:0.42rem;
+    padding:1px 4px 2px;
+  }
+
+  /* ── PROBABILITY CELLS ──
+     Bigger font + more padding now that AVG is gone and we have the
+     space. These are the data the punter is here for — they should
+     read clearly without squinting. */
+  .mc-disp-prob{
+    font-size:0.66rem;
+    padding:6px 5px;
+  }
+  .mc-disp-prob small{
+    font-size:0.62em;  /* smaller % unit on phone, less crowding */
+  }
+
+  /* ── FOOTER LEGEND ──
+     More generous spacing so the pills don't crash on each other on
+     a narrow viewport. */
+  .mc-disp-foot{
+    gap:11px;
+    padding:12px 14px 14px;
+  }
+  .mc-disp-foot-tiers{
+    gap:7px;
+  }
+  .mc-disp-foot-tier{
+    font-size:0.5rem;
+    padding:3px 8px;
+  }
+  .mc-disp-foot-meta{
+    gap:10px;
+    font-size:0.46rem;
   }
 }
 
@@ -8656,13 +8598,6 @@ components.html(
                     animateCell(cell, delay);
                 });
             });
-            // Also animate the top-edge callout cards' prob tiles.
-            const edgeCells = disclosure.querySelectorAll(
-                '.mc-disp-edge-prob-num'
-            );
-            edgeCells.forEach((cell, idx) => {
-                animateCell(cell, idx * 40);
-            });
         };
 
         // Wire listeners. Two strategies running in parallel:
@@ -8679,25 +8614,6 @@ components.html(
             // Also animate immediately if it's already open at wire time
             // — e.g. the user opens it before our script reaches it.
             if (disclosure.open) animateDisclosure(disclosure);
-
-            // Mark the hscroll container as "scrolled" the moment the
-            // user moves it sideways at all. This kills the right-edge
-            // swipe-hint chevron (see CSS rule on
-            // .mc-disp-hscroll[data-scrolled="1"]) so the hint never
-            // nags a user who's already discovered the swipe.
-            // {passive:true} keeps the scroll smooth — we never call
-            // preventDefault in here.
-            const scroller = disclosure.querySelector('.mc-disp-hscroll');
-            if (scroller && !scroller.__mcScrollWired) {
-                scroller.__mcScrollWired = true;
-                const onScroll = () => {
-                    if (scroller.scrollLeft > 4) {
-                        scroller.setAttribute('data-scrolled', '1');
-                        scroller.removeEventListener('scroll', onScroll);
-                    }
-                };
-                scroller.addEventListener('scroll', onScroll, {passive:true});
-            }
         };
 
         const wireAll = () => {
@@ -11262,19 +11178,64 @@ def fetch_h2h_player_id_lookup():
 
 def h2h_headshot_url(player_name, id_lookup):
     """Return a CDN headshot URL for `player_name`, or None if we can't
-    resolve the player's id. Applies H2H_PLAYER_NAME_ALIASES before the
-    lookup so footywire's formal forms (Lachlan/Zachary) map to AFL
-    Fantasy's casual forms (Lachie/Zach). Pure dict lookup — cheap to
-    call per-row."""
+    resolve the player's id.
+
+    Resolution chain (each step a pure dict lookup, all cheap):
+      1. Try the name as-is.
+      2. Apply the explicit H2H_PLAYER_NAME_ALIASES override
+         (for one-off corrections that don't follow a pattern).
+      3. Try the formal→casual diminutive (Lachlan → Lachie,
+         Maximilian → Max, etc) via H2H_FIRST_NAME_DIMINUTIVES.
+      4. Try the casual→formal direction in case AFL Fantasy
+         happens to carry the long form for a player whose
+         footywire entry uses the casual one.
+
+    Returns None at the end if all four lookups miss — the caller
+    falls back to the initials disc cleanly. The H2H watchlist
+    follows a separate but parallel resolution chain in
+    build_h2h_watchlist (see below)."""
     if not id_lookup:
         return None
-    # Honour the explicit alias map first; falls through unchanged if
-    # no alias is registered for this name
-    resolved_name = H2H_PLAYER_NAME_ALIASES.get(player_name, player_name)
-    pid = id_lookup.get(_normalise_player_name(resolved_name))
-    if pid is None:
-        return None
-    return _H2H_HEADSHOT_URL_TMPL.format(pid=pid)
+
+    # Step 1: try the name as-is
+    pid = id_lookup.get(_normalise_player_name(player_name))
+    if pid is not None:
+        return _H2H_HEADSHOT_URL_TMPL.format(pid=pid)
+
+    # Step 2: try the explicit alias map
+    aliased = H2H_PLAYER_NAME_ALIASES.get(player_name)
+    if aliased:
+        pid = id_lookup.get(_normalise_player_name(aliased))
+        if pid is not None:
+            return _H2H_HEADSHOT_URL_TMPL.format(pid=pid)
+
+    # Step 3: try formal → casual diminutive substitution
+    # (Lachlan Whitfield → Lachie Whitfield, etc)
+    normalised = _normalise_player_name(player_name)
+    parts = normalised.split(" ", 1)
+    if len(parts) == 2:
+        first, rest = parts
+        casual_first = H2H_FIRST_NAME_DIMINUTIVES.get(first)
+        if casual_first:
+            pid = id_lookup.get(f"{casual_first} {rest}")
+            if pid is not None:
+                return _H2H_HEADSHOT_URL_TMPL.format(pid=pid)
+
+        # Step 4: try the reverse — casual → formal. We invert the
+        # diminutives table for this. Done lazily on the spot to keep
+        # the module-level config simple; this branch only runs when
+        # steps 1-3 have already missed, so cost is negligible.
+        for formal, casual in H2H_FIRST_NAME_DIMINUTIVES.items():
+            if casual == first:
+                pid = id_lookup.get(f"{formal} {rest}")
+                if pid is not None:
+                    return _H2H_HEADSHOT_URL_TMPL.format(pid=pid)
+                # Only one mapping per casual form (modulo rare
+                # collisions like jonathon/jonathan → jon), so we
+                # could break — but let the loop finish in case
+                # multiple formal forms collapse to the same casual.
+
+    return None
 
 
 def _player_surname(name):
@@ -12122,8 +12083,8 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
     # mean desc so the per-card render is a simple slice — no per-card
     # sort work. Returns ({}, []) if the model is unavailable or the
     # scrape failed; the renderer hides itself cleanly in that case.
-    disposal_snapshot = get_disposal_projections()
-    disposal_by_team, disposal_thresholds = build_disposal_lookup(disposal_snapshot)
+    disposal_snapshot = get_disposal_projections(_disposal_cache_bucket())
+    disposal_by_team, disposal_thresholds, disposal_teams_named = build_disposal_lookup(disposal_snapshot)
 
     # Surface a single round-wide status banner ONLY for actionable failures.
     # The "ok" / "empty" cases are silent — per-card disclaimers handle those.
@@ -12420,6 +12381,7 @@ def render_tips(games, tips, sources, top_models, weights, rnd,
         disposal_block_html = render_disposal_block(
             home, away, disposal_by_team, disposal_thresholds,
             player_id_lookup=h2h_player_id_lookup,
+            teams_named=disposal_teams_named,
         )
 
         st.markdown(_h(f"""
@@ -18214,7 +18176,7 @@ def main():
                 # subsequent get_disposal_projections() call is a cached
                 # dict lookup. Failure here is silently swallowed — game
                 # cards still render, the disposal block just hides.
-                get_disposal_projections()
+                get_disposal_projections(_disposal_cache_bucket())
             except Exception:
                 pass
         except Exception as e:
@@ -18888,6 +18850,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

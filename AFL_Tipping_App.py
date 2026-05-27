@@ -7264,26 +7264,17 @@ def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
     )
 
     def _team_section(team_app_name, team_abbr_s_, accent, logo, players):
-        """Team banner (chip + player count) + column header + rows.
-        Empty teams render a quiet placeholder so the banner is still
-        visible — punter knows the team exists, just no data."""
-        logo_html = f'<img src="{logo}" class="mc-disp-sect-logo" />' if logo else ''
-        banner = (
-            f'<div class="mc-disp-sect-banner" style="--team-accent:{accent};">'
-            f'  <div class="mc-disp-sect-l">'
-            f'    {logo_html}'
-            f'    <span class="mc-disp-sect-abbr">{team_abbr_s_}</span>'
-            f'    <span class="mc-disp-sect-team">{team_app_name}</span>'
-            f'  </div>'
-            f'  <div class="mc-disp-sect-r">'
-            f'    <span class="mc-disp-sect-count">{len(players)}</span>'
-            f'    <span class="mc-disp-sect-count-lbl">PLAYERS</span>'
-            f'  </div>'
-            f'</div>'
-        )
+        """Team's table content — column header + player rows. Wrapped
+        in a `.mc-disp-team-pane` so the tab strip above can hide/show
+        it via a data attribute. The team identity itself is carried by
+        the tab strip now (not a banner inside the pane), so we drop
+        the old sect-banner here entirely. The pane only contains the
+        scannable data."""
         if not players:
-            return banner + (
-                '<div class="mc-disp-empty">Player pool not seen recently enough</div>'
+            return (
+                '<div class="mc-disp-empty">'
+                'Player pool not seen recently enough'
+                '</div>'
             )
         column_header = (
             '<div class="mc-disp-colhead">'
@@ -7297,7 +7288,7 @@ def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
         rows_html = "".join(
             _player_row(p, accent, i) for i, p in enumerate(players)
         )
-        return banner + column_header + rows_html
+        return column_header + rows_html
 
     home_section = _team_section(home_app_name, home_abbr_s, home_accent,
                                   home_logo, home_players)
@@ -7349,8 +7340,50 @@ def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
             '</span>'
         )
 
+    # ── TAB STRIP ──
+    # Sits at the top of the panel body, sticky-pinned so it's always
+    # accessible. Two team tabs + a close button on the right. Home is
+    # active by default. On click, vanilla JS (in the components.html
+    # block elsewhere) toggles data-active on the body and switches
+    # which pane shows.
+    home_logo_chip = (
+        f'<img src="{home_logo}" class="mc-disp-tab-logo" alt="" />'
+        if home_logo else ''
+    )
+    away_logo_chip = (
+        f'<img src="{away_logo}" class="mc-disp-tab-logo" alt="" />'
+        if away_logo else ''
+    )
+    home_player_count = len(home_players)
+    away_player_count = len(away_players)
+    tab_strip_html = (
+        '<div class="mc-disp-tabs" role="tablist">'
+        '<div class="mc-disp-tabs-group">'
+        f'<button type="button" class="mc-disp-tab mc-disp-tab-home" '
+        f'        role="tab" data-team="home" aria-selected="true" '
+        f'        style="--team-accent:{home_accent};">'
+        f'  {home_logo_chip}'
+        f'  <span class="mc-disp-tab-abbr">{home_abbr_s}</span>'
+        f'  <span class="mc-disp-tab-count">{home_player_count}</span>'
+        f'</button>'
+        f'<button type="button" class="mc-disp-tab mc-disp-tab-away" '
+        f'        role="tab" data-team="away" aria-selected="false" '
+        f'        style="--team-accent:{away_accent};">'
+        f'  {away_logo_chip}'
+        f'  <span class="mc-disp-tab-abbr">{away_abbr_s}</span>'
+        f'  <span class="mc-disp-tab-count">{away_player_count}</span>'
+        f'</button>'
+        '</div>'
+        '<button type="button" class="mc-disp-close" '
+        '        aria-label="Close player disposals panel" '
+        '        title="Close">'
+        '<span class="mc-disp-close-glyph">×</span>'
+        '</button>'
+        '</div>'
+    )
+
     return _h(f"""
-    <details class="mc-disp-disclosure">
+    <details class="mc-disp-disclosure" data-active="home">
       <summary class="mc-disp-summary">
         <span class="mc-disp-sum-left">
           <span class="mc-disp-sum-title">Player Disposals Predictor</span>
@@ -7359,10 +7392,15 @@ def render_disposal_block(home_app_name, away_app_name, by_team, thresholds,
         <span class="mc-disp-sum-chevron">›</span>
       </summary>
       <div class="mc-disp-body">
+        {tab_strip_html}
         <div class="mc-disp-hscroll">
           <div class="mc-disp-table">
-            {home_section}
-            {away_section}
+            <div class="mc-disp-team-pane" data-team="home">
+              {home_section}
+            </div>
+            <div class="mc-disp-team-pane" data-team="away">
+              {away_section}
+            </div>
           </div>
         </div>
         {foot}
@@ -7640,68 +7678,190 @@ st.markdown("""
   min-width:100%;
 }
 
-/* ── TEAM SECTION BANNER ──
-   One per team. Sticky on BOTH axes inside the scroll container:
-     • top:0 — when the user scrolls DOWN through a long team roster,
-       the banner stays pinned at the top of the visible scroll area
-       so they always know which team's section they're looking at.
-     • left:0 — when the user swipes RIGHT to see higher thresholds,
-       the banner stays anchored to the visible-left edge instead of
-       scrolling off into the columns.
-   z-index:7 keeps it above the column header (which also sticks). */
-.mc-disp-sect-banner{
-  display:flex; align-items:center; justify-content:space-between;
-  padding:10px 14px;
-  background:linear-gradient(90deg,
-    color-mix(in srgb, var(--team-accent) 12%, var(--card)) 0%,
-    var(--card) 100%);
-  border-bottom:1px solid var(--border2);
-  border-left:3px solid var(--team-accent);
+/* ══════════════════════════════════════════════════════════════════════
+   TAB STRIP + CLOSE BUTTON — top of the open panel
+   ══════════════════════════════════════════════════════════════════════
+   When the disclosure opens, the user sees two tabs (one per team)
+   plus a close button at the far right. Tapping a tab switches the
+   visible team's table — only one team is shown at a time, so the
+   panel feels light and focused (especially on phone). Tapping the
+   close button dismisses the whole disclosure (details.open = false)
+   without scrolling.
+
+   The tabs are sticky-pinned at top:0 within the panel body, so they
+   stay accessible while the user scrolls through a long roster. The
+   close button rides along on the same sticky bar.
+
+   Tab states:
+     • aria-selected="true"  → active tab. Team accent underline lit,
+                                team chip bright, count number bright.
+     • aria-selected="false" → inactive. Dim text, dim count.
+
+   The toggle wiring is in the components.html block (see "TAB SWITCH"
+   in that script). It listens for tab clicks, flips aria-selected on
+   the buttons, and flips data-active on the parent .mc-disp-disclosure
+   so the CSS [data-active=home/away] rules below show/hide the right
+   pane. */
+.mc-disp-tabs{
+  display:flex;
+  align-items:stretch;
+  justify-content:space-between;
+  gap:8px;
+  padding:8px 10px;
+  background:var(--bg2);
+  border-bottom:1px solid var(--border);
   position:sticky;
   top:0;
-  left:0;
-  width:max-content;
-  min-width:100%;
-  box-sizing:border-box;
-  z-index:7;
+  z-index:9;
 }
-.mc-disp-sect-l{
-  display:flex; align-items:center; gap:8px;
+.mc-disp-tabs-group{
+  display:flex;
+  align-items:stretch;
+  gap:6px;
+  flex:1;
+  min-width:0;
 }
-.mc-disp-sect-logo{
-  width:20px; height:20px;
-  object-fit:contain;
-  filter:drop-shadow(0 0 4px color-mix(in srgb, var(--team-accent) 40%, transparent));
-}
-.mc-disp-sect-abbr{
+
+/* ── TAB BUTTON ─────────────────────────────────────────────────── */
+.mc-disp-tab{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  padding:7px 12px;
+  background:transparent;
+  border:1px solid transparent;
+  border-radius:5px;
   font-family:var(--mono);
-  font-size:0.72rem; font-weight:800;
+  cursor:pointer;
+  position:relative;
+  -webkit-tap-highlight-color:transparent;
+  transition:background 0.18s ease, border-color 0.18s ease,
+             color 0.18s ease;
+  /* Strip default button chrome — these are styled link-buttons */
+  outline:none;
+  appearance:none;
+  -webkit-appearance:none;
+  color:var(--text2);
+}
+.mc-disp-tab:hover{
+  background:rgba(255,255,255,0.04);
+  border-color:rgba(255,255,255,0.08);
+}
+.mc-disp-tab:focus-visible{
+  outline:1px solid var(--accent2);
+  outline-offset:2px;
+}
+
+/* Active tab: lit team accent underline (3px), bright text, faint
+   background tint in the team colour. The underline IS the active
+   signal — far cleaner than recolouring the whole tab background. */
+.mc-disp-tab[aria-selected="true"]{
+  background:color-mix(in srgb, var(--team-accent) 8%, transparent);
+  border-color:color-mix(in srgb, var(--team-accent) 28%, transparent);
+  color:var(--white);
+  /* Bottom border becomes the team-accent underline. Sits flush with
+     the .mc-disp-tabs bottom border below, so the active tab visually
+     "connects" to the pane underneath. */
+  box-shadow:inset 0 -3px 0 var(--team-accent),
+             0 0 8px color-mix(in srgb, var(--team-accent) 14%, transparent);
+}
+
+.mc-disp-tab-logo{
+  width:18px; height:18px;
+  object-fit:contain;
+  filter:drop-shadow(0 0 3px color-mix(in srgb, var(--team-accent) 35%, transparent));
+  opacity:0.85;
+  transition:opacity 0.18s ease;
+}
+.mc-disp-tab[aria-selected="true"] .mc-disp-tab-logo{opacity:1;}
+
+.mc-disp-tab-abbr{
+  font-size:0.62rem;
+  font-weight:800;
   letter-spacing:0.06em;
   color:var(--team-accent);
   line-height:1;
 }
-.mc-disp-sect-team{
-  font-family:var(--mono);
-  font-size:0.52rem; font-weight:600;
-  letter-spacing:0.02em;
-  color:var(--text);
-  line-height:1;
+.mc-disp-tab[aria-selected="false"] .mc-disp-tab-abbr{
+  /* Inactive tabs still show team colour for identity, just dimmer */
+  color:color-mix(in srgb, var(--team-accent) 55%, var(--text3));
 }
-.mc-disp-sect-r{
-  display:flex; align-items:baseline; gap:4px;
-}
-.mc-disp-sect-count{
-  font-family:var(--mono);
-  font-size:0.66rem; font-weight:800;
-  color:var(--white);
+
+.mc-disp-tab-count{
+  font-size:0.55rem;
+  font-weight:700;
   font-variant-numeric:tabular-nums;
-  line-height:1;
-}
-.mc-disp-sect-count-lbl{
-  font-family:var(--mono);
-  font-size:0.44rem; font-weight:600;
-  letter-spacing:0.14em; text-transform:uppercase;
   color:var(--text3);
+  padding:2px 5px;
+  border-radius:3px;
+  background:rgba(255,255,255,0.04);
+  letter-spacing:0;
+  line-height:1;
+  transition:color 0.18s ease, background 0.18s ease;
+}
+.mc-disp-tab[aria-selected="true"] .mc-disp-tab-count{
+  color:var(--white);
+  background:rgba(255,255,255,0.08);
+}
+
+/* ── CLOSE BUTTON ───────────────────────────────────────────────── */
+.mc-disp-close{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:30px; height:30px;
+  background:transparent;
+  border:1px solid var(--border);
+  border-radius:5px;
+  cursor:pointer;
+  color:var(--text3);
+  font-family:var(--mono);
+  flex-shrink:0;
+  align-self:center;
+  -webkit-tap-highlight-color:transparent;
+  transition:background 0.18s ease, border-color 0.18s ease,
+             color 0.18s ease, transform 0.18s ease;
+  appearance:none;
+  -webkit-appearance:none;
+  outline:none;
+}
+.mc-disp-close:hover{
+  background:rgba(255,255,255,0.06);
+  border-color:rgba(255,255,255,0.14);
+  color:var(--white);
+  transform:scale(1.05);
+}
+.mc-disp-close:active{transform:scale(0.95);}
+.mc-disp-close:focus-visible{
+  outline:1px solid var(--accent2);
+  outline-offset:2px;
+}
+.mc-disp-close-glyph{
+  font-size:1.05rem;
+  font-weight:300;
+  line-height:1;
+  display:inline-block;
+  /* Subtle vertical alignment nudge — × renders slightly low */
+  transform:translateY(-1px);
+}
+
+/* ── TEAM PANES ────────────────────────────────────────────────────
+   Each team's column-header + rows live in their own .mc-disp-team-pane.
+   The parent .mc-disp-disclosure has data-active="home" or "away".
+   CSS hides the inactive pane via display:none — clean toggle, no
+   layout shift, no animation overhead.
+
+   We deliberately use display:none rather than visibility/opacity so
+   the inactive pane doesn't contribute height. Tab switch swaps which
+   pane occupies the table area; the scroll container's height is
+   driven by whatever's visible. */
+.mc-disp-disclosure[data-active="home"] .mc-disp-team-pane[data-team="away"],
+.mc-disp-disclosure[data-active="away"] .mc-disp-team-pane[data-team="home"]{
+  display:none;
+}
+.mc-disp-team-pane{
+  /* No padding/border of its own — the pane is just a container. The
+     colhead and rows inside set their own visual rhythm. */
 }
 
 /* ── COLUMN HEADER + PLAYER ROW ──
@@ -7736,11 +7896,12 @@ st.markdown("""
   border-bottom:2px solid color-mix(in srgb, var(--accent2) 30%, var(--border2));
   padding-top:9px;
   padding-bottom:9px;
-  /* Sticky below the team banner — when scrolling vertically through
-     a long roster, the column labels never disappear above the fold.
-     top:42px matches the team banner's measured height. */
+  /* Sticky at top:0 inside the scroll container — there's nothing
+     above the colhead anymore since the team banner moved out to
+     the tab strip (which lives OUTSIDE the scroll container as a
+     panel-level sticky element). */
   position:sticky;
-  top:42px;
+  top:0;
   z-index:6;
   /* Subtle inset highlight at top so the header bar feels lifted —
      small touch but it makes the header read as a distinct band
@@ -8322,12 +8483,14 @@ st.markdown("""
   }
 
   /* ── COLUMN HEADER ──
-     Sticky below the team banner. Mobile banner is ~38px after the
-     padding bump below, so set sticky offset to 38px. Font is bigger
-     than desktop because phone column labels are the punter's anchor. */
+     Sticky at top:0 inside the scroll container — the team banner
+     that used to sit above it has moved out to the tab strip
+     (which is sticky at the panel-body level, not inside the
+     scroll). Font bumped on mobile since column labels are the
+     punter's anchor when scanning. */
   .mc-disp-colhead{
     padding:11px 14px;
-    top:38px;
+    top:0;
   }
   .mc-disp-colhead .mc-disp-cell{
     font-size:0.58rem;
@@ -8338,17 +8501,24 @@ st.markdown("""
     font-weight:800;
   }
 
-  /* ── TEAM BANNER ──
-     The team-chip anchor for the section. Generous padding so the
-     team abbreviation reads as an actual section header. */
-  .mc-disp-sect-banner{
-    padding:11px 14px;
+  /* ── TAB STRIP (mobile) ──
+     Tighten the tab strip slightly on phones. Tabs stay roomy for
+     thumb-tap targets, just less horizontal padding than desktop. */
+  .mc-disp-tabs{
+    padding:7px 8px;
+    gap:6px;
   }
-  .mc-disp-sect-abbr{
-    font-size:0.72rem;
-    letter-spacing:0.07em;
+  .mc-disp-tab{
+    padding:8px 11px;
+    gap:6px;
   }
-  .mc-disp-sect-team{display:none;}  /* abbr is enough on phone */
+  .mc-disp-tab-logo{width:16px; height:16px;}
+  .mc-disp-tab-abbr{font-size:0.66rem;}
+  .mc-disp-tab-count{font-size:0.55rem; padding:2px 5px;}
+  .mc-disp-close{
+    width:34px; height:34px;  /* bigger tap target on touch */
+  }
+  .mc-disp-close-glyph{font-size:1.15rem;}
 
   /* Cap scroll container shorter on phones — viewport is narrower so
      the panel feels proportionate. */
@@ -8614,6 +8784,44 @@ components.html(
             // Also animate immediately if it's already open at wire time
             // — e.g. the user opens it before our script reaches it.
             if (disclosure.open) animateDisclosure(disclosure);
+
+            // ── TAB SWITCH ──
+            // Click on a tab → flip aria-selected on the buttons and
+            // flip data-active on the disclosure root. The CSS hide/show
+            // rule on [data-active] does the rest. e.preventDefault()
+            // stops the click from bubbling up to the <summary> and
+            // toggling the disclosure (the tabs sit visually inside
+            // the open panel, so a stray bubble would close it).
+            const tabs = disclosure.querySelectorAll('.mc-disp-tab');
+            tabs.forEach(tab => {
+                tab.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const team = tab.getAttribute('data-team');
+                    if (!team) return;
+                    // Update tab aria states
+                    tabs.forEach(t => {
+                        t.setAttribute('aria-selected',
+                            t === tab ? 'true' : 'false');
+                    });
+                    // Switch the active pane via data-active
+                    disclosure.setAttribute('data-active', team);
+                });
+            });
+
+            // ── CLOSE BUTTON ──
+            // Tap × → collapse the disclosure (details.open = false).
+            // Same prevent/stop dance as tabs so the click doesn't
+            // bubble up to summary and trigger the native toggle in
+            // the wrong direction.
+            const closeBtn = disclosure.querySelector('.mc-disp-close');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    disclosure.open = false;
+                });
+            }
         };
 
         const wireAll = () => {
@@ -18850,6 +19058,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
